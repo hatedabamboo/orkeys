@@ -5,7 +5,7 @@
 [![Go Reference](https://pkg.go.dev/badge/github.com/hatedabamboo/orkeys.svg)](https://pkg.go.dev/github.com/hatedabamboo/orkeys)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-orkeys manages [OpenRouter](https://openrouter.ai) API keys from the terminal. It uses the
+orkeys (pronounced "ORKies") manages [OpenRouter](https://openrouter.ai) API keys from the terminal. It uses the
 [Management API](https://openrouter.ai/docs/guides/overview/auth/management-api-keys).
 Use the CLI commands in scripts, or use interactive mode by hand.
 

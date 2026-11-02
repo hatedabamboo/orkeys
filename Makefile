@@ -9,7 +9,7 @@ GORELEASER_VERSION ?= v2.12.0
 PLATFORMS := darwin/amd64 darwin/arm64 linux/amd64 linux/arm64 windows/amd64
 
 .DEFAULT_GOAL := build
-.PHONY: build install test vet fmt fmt-check check lint tidy release snapshot clean help
+.PHONY: build install test vet fmt fmt-check check lint tidy release snapshot clean help bump-patch bump-minor bump-major
 
 build: ## Build the binary for this machine
 	go build $(GOFLAGS) -ldflags "$(LDFLAGS)" -o $(BINARY) $(PKG)
@@ -52,6 +52,29 @@ snapshot: ## Local GoReleaser build into dist/, no publish
 
 clean: ## Remove build output
 	rm -rf $(BINARY) $(DIST)
+
+bump-patch: ## Bump patch version in VERSION (v1.2.3 -> v1.2.4)
+	@$(call bump,patch)
+
+bump-minor: ## Bump minor version in VERSION (v1.2.3 -> v1.3.0)
+	@$(call bump,minor)
+
+bump-major: ## Bump major version in VERSION (v1.2.3 -> v2.0.0)
+	@$(call bump,major)
+
+define bump
+	cur="$$(tr -d '[:space:]' < VERSION)"; \
+	echo "$$cur" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$$' || { echo "VERSION is not vX.Y.Z: $$cur"; exit 1; }; \
+	v="$${cur#v}"; maj="$${v%%.*}"; rest="$${v#*.}"; min="$${rest%%.*}"; pat="$${rest#*.}"; \
+	case "$(1)" in \
+		major) maj=$$((maj+1)); min=0; pat=0 ;; \
+		minor) min=$$((min+1)); pat=0 ;; \
+		patch) pat=$$((pat+1)) ;; \
+	esac; \
+	new="v$$maj.$$min.$$pat"; \
+	echo "$$new" > VERSION; \
+	echo "$$cur -> $$new"
+endef
 
 help: ## Show targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk -F':.*?## ' '{printf "  %-10s %s\n", $$1, $$2}'
