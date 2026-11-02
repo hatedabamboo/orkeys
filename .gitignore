@@ -1,0 +1,19 @@
+# Build output
+/orkeys
+/orkeys.exe
+/dist/
+
+# Test and coverage
+*.test
+*.out
+coverage.*
+
+# Editors and OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# Local env files with secrets
+.env
+.env.*
