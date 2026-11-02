@@ -1,6 +1,5 @@
 # orkeys
 
-[![CI](https://github.com/hatedabamboo/orkeys/actions/workflows/ci.yml/badge.svg)](https://github.com/hatedabamboo/orkeys/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/hatedabamboo/orkeys)](https://github.com/hatedabamboo/orkeys/releases)
 [![Go Reference](https://pkg.go.dev/badge/github.com/hatedabamboo/orkeys.svg)](https://pkg.go.dev/github.com/hatedabamboo/orkeys)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
