@@ -9,35 +9,35 @@ import (
 	"strings"
 	"time"
 
-	"github.com/hatedabamboo/orkeys/internal/api"
+	"github.com/hatedabamboo/orkeys/internal/openrouter"
 )
 
 // LimitResets are the values the API accepts for limit_reset, plus "none" for null.
 var LimitResets = []string{"none", "daily", "weekly", "monthly"}
 
 // ParseLimit parses a USD limit. "", "none", "null" and "unlimited" mean null.
-func ParseLimit(s string) (api.Nullable[float64], error) {
+func ParseLimit(s string) (openrouter.Nullable[float64], error) {
 	s = strings.TrimPrefix(strings.TrimSpace(s), "$")
 	switch strings.ToLower(s) {
 	case "", "none", "null", "unlimited":
-		return api.Null[float64](), nil
+		return openrouter.Null[float64](), nil
 	}
 	v, err := strconv.ParseFloat(s, 64)
 	if err != nil || math.IsNaN(v) || v < 0 || v >= 1_000_000 {
-		return api.Nullable[float64]{}, fmt.Errorf("invalid limit %q: want a number in [0, 1000000) or \"none\"", s)
+		return openrouter.Nullable[float64]{}, fmt.Errorf("invalid limit %q: want a number in [0, 1000000) or \"none\"", s)
 	}
-	return api.Value(v), nil
+	return openrouter.Value(v), nil
 }
 
 // ParseLimitReset parses daily|weekly|monthly. "", "none" and "null" mean null.
-func ParseLimitReset(s string) (api.Nullable[string], error) {
+func ParseLimitReset(s string) (openrouter.Nullable[string], error) {
 	switch v := strings.ToLower(strings.TrimSpace(s)); v {
 	case "", "none", "null", "never":
-		return api.Null[string](), nil
+		return openrouter.Null[string](), nil
 	case "daily", "weekly", "monthly":
-		return api.Value(v), nil
+		return openrouter.Value(v), nil
 	default:
-		return api.Nullable[string]{}, fmt.Errorf("invalid limit reset %q: want daily|weekly|monthly|none", s)
+		return openrouter.Nullable[string]{}, fmt.Errorf("invalid limit reset %q: want daily|weekly|monthly|none", s)
 	}
 }
 
@@ -170,7 +170,7 @@ func YesNo(b bool) string {
 }
 
 // Fields lists the fields of a key as label/value pairs for display.
-func Fields(k api.Key) [][2]string {
+func Fields(k openrouter.Key) [][2]string {
 	return [][2]string{
 		{"Name", k.Name},
 		{"Label", k.Label},
@@ -192,4 +192,24 @@ func Fields(k api.Key) [][2]string {
 		{"Creator user", Str(k.CreatorUserID)},
 		{"External user", Str(k.ExternalUser)},
 	}
+}
+
+func ParseDuration(s string) (time.Duration, error) {
+	s = strings.TrimSpace(s)
+	if d, ok := parseDays(s); ok {
+		return d, nil
+	}
+	d, err := time.ParseDuration(s)
+	if err != nil || d <= 0 {
+		return 0, fmt.Errorf("invalid duration %q: use 90d, 2w, 24h or 30m", s)
+	}
+	return d, nil
+}
+
+func Days(d time.Duration) string {
+	day := 24 * time.Hour
+	if d > 0 && d%day == 0 {
+		return fmt.Sprintf("%dd", d/day)
+	}
+	return d.String()
 }

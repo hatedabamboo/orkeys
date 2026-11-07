@@ -1,0 +1,17 @@
+name: prod-chat-core-dialog
+kind: production
+provider: openrouter
+env: prod
+service: dialog
+description: Reply generation.
+budget:
+  limit: 200
+ttl: 90d
+secret:
+  path: kv/llm/prod/chat-core/dialog
+consumers:
+  - type: eso
+    cluster: prod-eu
+    namespace: chat
+    externalsecret: dialog-llm
+    restart: [deployment/dialog]

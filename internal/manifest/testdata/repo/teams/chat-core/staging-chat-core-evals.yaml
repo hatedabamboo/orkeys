@@ -1,0 +1,11 @@
+name: staging-chat-core-evals
+kind: production
+provider: deepinfra
+env: staging
+service: evals
+description: Offline evals.
+scopes: [inference]
+budget: {limit: 100}
+ttl: 30d
+secret:
+  path: kv/llm/staging/chat-core/evals

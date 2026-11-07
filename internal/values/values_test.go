@@ -78,3 +78,26 @@ func TestIsFullHash(t *testing.T) {
 		t.Error("IsFullHash mismatch")
 	}
 }
+
+func TestParseDuration(t *testing.T) {
+	cases := map[string]time.Duration{
+		"90d": 90 * 24 * time.Hour,
+		"2w":  14 * 24 * time.Hour,
+		"24h": 24 * time.Hour,
+		"30m": 30 * time.Minute,
+	}
+	for in, want := range cases {
+		got, err := ParseDuration(in)
+		if err != nil || got != want {
+			t.Errorf("ParseDuration(%q) = %v, %v; want %v", in, got, err, want)
+		}
+	}
+	for _, in := range []string{"", "0d", "-1h", "abc", "5x"} {
+		if _, err := ParseDuration(in); err == nil {
+			t.Errorf("ParseDuration(%q): want error", in)
+		}
+	}
+	if Days(90*24*time.Hour) != "90d" || Days(36*time.Hour) != "36h0m0s" {
+		t.Error("Days formatting")
+	}
+}

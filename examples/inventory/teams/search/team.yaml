@@ -1,0 +1,8 @@
+---
+team: search                                  # must match the directory name
+channels:                                     # exported as metric labels for Alertmanager
+  notifications: "#search-notifications"
+  alerts: "#search-alerts"
+members:                                      # GitHub logins; may request keys
+  - alice
+  - bob

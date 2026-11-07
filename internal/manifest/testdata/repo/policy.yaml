@@ -1,0 +1,33 @@
+naming: '^(prod|staging|dev)-[a-z0-9]+(-[a-z0-9]+)+$'
+kinds:
+  production:
+    ttl: 90d
+    rotate_before: 7d
+    revoke_grace: 24h
+    budget: {reset: monthly, limit: 200}
+  personal:
+    source: request
+    alert_channel: notifications
+    ttl: 14d
+    budget: {limit: 25}
+    max_limit: 100
+    max_active: 2
+    max_total_limit: 150
+    notify_before: 3d
+    providers: [openrouter, deepinfra]
+  local:
+    source: request
+    alert_channel: notifications
+    ttl: 7d
+    max_limit: 20
+    max_active: 1
+    providers: [openrouter, deepinfra]
+providers:
+  openrouter:
+    management_key: kv/orkeys/providers/openrouter
+  deepinfra:
+    management_key: kv/orkeys/providers/deepinfra
+state: vault://kv/orkeys/state
+secrets: vault
+github:
+  org: example
