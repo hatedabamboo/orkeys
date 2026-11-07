@@ -1,0 +1,24 @@
+---
+name: prod-search-embeddings                  # must match the file name
+kind: production
+provider: openrouter
+env: prod
+service: embeddings                           # free text, metric label
+description: Query rewriting for the search API.
+budget:                                       # limit at the provider, per period
+  reset: monthly
+  limit: 1000
+ttl: 90d
+secret:                                       # where orkeys writes the key
+  path: secret/llm/prod/search/embeddings
+  field: api_key
+consumers:
+  - type: eso                                 # force-sync the ExternalSecret
+    cluster: prod-eu
+    namespace: search
+    externalsecret: search-llm
+    restart: [deployment/search-api]          # restarted after the sync
+  - type: direct                              # reads Vault itself; no sync
+    cluster: prod-eu
+    namespace: search
+    restart: [deployment/search-indexer, cronjob/search-reindex]

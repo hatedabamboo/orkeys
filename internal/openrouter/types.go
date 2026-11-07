@@ -1,4 +1,4 @@
-package api
+package openrouter
 
 import (
 	"encoding/json"

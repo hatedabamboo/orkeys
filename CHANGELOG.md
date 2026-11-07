@@ -6,6 +6,32 @@ This project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- Inventory mode: `validate`, `plan`, `apply`, `rotate`, `request`, `issued`, `import`, `hygiene`, `unlock` and
+  `exporter` commands. See README and `examples/inventory`.
+- `orkeys deepinfra` (`di`): list and get DeepInfra tokens with limit and spend. Writes need a dashboard login at
+  DeepInfra and fail with API keys (see README).
+- State in Vault or S3, secrets in Vault or AWS Secrets Manager.
+- State lock: S3 conditional writes or Vault check-and-set.
+- Key kinds defined in `policy.yaml`: any name, `source: manifest` (rotated) or `source: request` (self-service,
+  expires). Each kind sets TTL, default and maximum limit, limit period, allowed providers and alert channel.
+- `import: {id, name}` in a manifest adopts an existing provider key; `orkeys import` prints such manifests.
+- One `budget: {reset, limit}` per key: the limit at the provider and its period. Spend metrics follow the period.
+- Self-service keys with per-person limits, encrypted with age to GitHub SSH keys.
+- Structured events (text or one JSON document with `-o json`) instead of notifications.
+- Prometheus exporter; it can read `policy.yaml` with `--policy`.
+- Vault AppRole and Kubernetes auth.
+- Dockerfile.
+
+### Changed
+
+- OpenRouter key commands moved under `orkeys openrouter` (`or`): `orkeys list` is now `orkeys or list`.
+
+### Removed
+
+- Interactive mode. orkeys is now a CLI and an exporter daemon only.
+
 ## [0.1.0] - 2026-11-02
 
 ### Added

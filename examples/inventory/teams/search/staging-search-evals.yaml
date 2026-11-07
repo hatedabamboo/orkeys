@@ -1,0 +1,14 @@
+---
+name: staging-search-evals
+kind: production
+provider: openrouter
+env: staging
+service: evals
+description: Offline relevance evals.
+budget:
+  reset: weekly                               # $25 per week
+  limit: 25
+ttl: 30d                                      # shorter than the kind max
+secret:
+  path: secret/llm/staging/search/evals       # field defaults to api_key
+                                              # no consumers: nothing to sync or restart

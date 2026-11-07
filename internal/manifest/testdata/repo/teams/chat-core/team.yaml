@@ -1,0 +1,5 @@
+team: chat-core
+channels:
+  notifications: "#chat-core-notifications"
+  alerts: "#chat-core-alerts"
+members: [jdoe, asmith]

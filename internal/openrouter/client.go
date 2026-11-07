@@ -1,6 +1,6 @@
-// Package api is a small client for the OpenRouter key Management API.
+// Package openrouter is a small client for the OpenRouter key Management API.
 // Docs: https://openrouter.ai/docs/guides/overview/auth/management-api-keys
-package api
+package openrouter
 
 import (
 	"bytes"

@@ -11,9 +11,39 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/hatedabamboo/orkeys/internal/api"
+	"github.com/hatedabamboo/orkeys/internal/openrouter"
 	"github.com/hatedabamboo/orkeys/internal/values"
 )
+
+func (a *app) openrouterCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:     "openrouter",
+		Aliases: []string{"or"},
+		Short:   "Manage OpenRouter keys directly",
+		Long: `Manage OpenRouter keys with a management key.
+
+Environment:
+  ` + EnvKey + `   management API key (required)
+  ` + EnvBase + `             API base URL (default ` + openrouter.DefaultBaseURL + `)
+  ` + EnvWorkspace + `         workspace ID for list/create/lookup (optional)
+
+Commands that take <key> accept a full hash, a unique hash prefix, or an exact key name.`,
+		Args: cobra.NoArgs,
+	}
+	pf := cmd.PersistentFlags()
+	pf.StringVar(&a.baseURL, "base-url", envOr(EnvBase, openrouter.DefaultBaseURL), "API base URL (env "+EnvBase+")")
+	pf.StringVarP(&a.workspace, "workspace", "w", os.Getenv(EnvWorkspace), "workspace ID (env "+EnvWorkspace+")")
+	cmd.AddCommand(
+		a.listCmd(),
+		a.getCmd(),
+		a.createCmd(),
+		a.updateCmd(),
+		a.toggleCmd("enable", false),
+		a.toggleCmd("disable", true),
+		a.deleteCmd(),
+	)
+	return cmd
+}
 
 func (a *app) listCmd() *cobra.Command {
 	var (
@@ -30,8 +60,8 @@ func (a *app) listCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			opts := api.ListOptions{IncludeDisabled: includeDisabled, WorkspaceID: a.workspace}
-			var keys []api.Key
+			opts := openrouter.ListOptions{IncludeDisabled: includeDisabled, WorkspaceID: a.workspace}
+			var keys []openrouter.Key
 			if cmd.Flags().Changed("offset") {
 				opts.Offset = offset
 				keys, err = c.List(cmd.Context(), opts)
@@ -42,7 +72,7 @@ func (a *app) listCmd() *cobra.Command {
 				return err
 			}
 			if keys == nil {
-				keys = []api.Key{}
+				keys = []openrouter.Key{}
 			}
 			return a.printKeys(keys)
 		},
@@ -83,14 +113,14 @@ func (a *app) createCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "create",
 		Short: "Create a key (the secret is shown only once)",
-		Example: `  orkeys create --name ci --limit 20 --limit-reset monthly --expires 90d
-  KEY=$(orkeys create --name tmp --expires 12h -q)`,
+		Example: `  orkeys or create --name ci --limit 20 --limit-reset monthly --expires 90d
+  KEY=$(orkeys or create --name tmp --expires 12h -q)`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if strings.TrimSpace(name) == "" {
 				return errors.New("--name is required")
 			}
-			req := api.CreateRequest{Name: name, WorkspaceID: a.workspace, CreatorUserID: creator}
+			req := openrouter.CreateRequest{Name: name, WorkspaceID: a.workspace, CreatorUserID: creator}
 			f := cmd.Flags()
 			if f.Changed("limit") {
 				v, err := values.ParseLimit(limit)
@@ -160,11 +190,11 @@ func (a *app) updateCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "update <key>",
 		Short: "Change fields of a key",
-		Example: `  orkeys update ci --limit 50 --limit-reset weekly
-  orkeys update 3f2a9c --limit none --name "ci (old)"`,
+		Example: `  orkeys or update ci --limit 50 --limit-reset weekly
+  orkeys or update 3f2a9c --limit none --name "ci (old)"`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			var req api.UpdateRequest
+			var req openrouter.UpdateRequest
 			f := cmd.Flags()
 			if f.Changed("name") {
 				req.Name = &name
@@ -231,8 +261,8 @@ func (a *app) toggleCmd(use string, disable bool) *cobra.Command {
 			for _, ref := range args {
 				hash, err := a.resolve(cmd.Context(), c, ref)
 				if err == nil {
-					var k *api.Key
-					k, err = c.Update(cmd.Context(), hash, api.UpdateRequest{Disabled: &disable})
+					var k *openrouter.Key
+					k, err = c.Update(cmd.Context(), hash, openrouter.UpdateRequest{Disabled: &disable})
 					if err == nil {
 						fmt.Printf("%sd %s (%s)\n", use, k.Name, values.ShortHash(k.Hash))
 						continue
@@ -264,7 +294,7 @@ func (a *app) deleteCmd() *cobra.Command {
 			ctx := cmd.Context()
 
 			// Resolve everything first, so a typo aborts before any delete.
-			var targets []api.Key
+			var targets []openrouter.Key
 			for _, ref := range args {
 				hash, err := a.resolve(ctx, c, ref)
 				if err != nil {
@@ -310,7 +340,7 @@ func (a *app) deleteCmd() *cobra.Command {
 }
 
 // resolve turns a full hash, unique hash prefix or exact name into a full hash.
-func (a *app) resolve(ctx context.Context, c *api.Client, ref string) (string, error) {
+func (a *app) resolve(ctx context.Context, c *openrouter.Client, ref string) (string, error) {
 	ref = strings.TrimSpace(ref)
 	if values.IsFullHash(ref) {
 		return ref, nil
@@ -318,12 +348,12 @@ func (a *app) resolve(ctx context.Context, c *api.Client, ref string) (string, e
 	if ref == "" {
 		return "", errors.New("empty key reference")
 	}
-	keys, err := c.ListAll(ctx, api.ListOptions{IncludeDisabled: true, WorkspaceID: a.workspace})
+	keys, err := c.ListAll(ctx, openrouter.ListOptions{IncludeDisabled: true, WorkspaceID: a.workspace})
 	if err != nil {
 		return "", err
 	}
 
-	var byName, byPrefix []api.Key
+	var byName, byPrefix []openrouter.Key
 	for _, k := range keys {
 		if k.Name == ref {
 			byName = append(byName, k)

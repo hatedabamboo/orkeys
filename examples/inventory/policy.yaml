@@ -1,0 +1,47 @@
+state: vault://secret/orkeys/state            # where orkeys keeps key state
+secrets: vault                                # where keys are written: vault or aws
+
+envs: [prod, staging, dev]                    # allowed env values in manifests
+name_prefix: "{env}-{team}-"                  # required key name prefix
+
+kinds:
+  production:                                 # keys from manifests, rotated
+    ttl: 90d                                  # default and max key lifetime
+    rotate_before: 3d                         # start rotation 3d before expiry
+    revoke_grace: 24h                         # keep the old key 24h after the switch
+    budget:                                   # default limit at the provider
+      reset: monthly
+      limit: 100
+  personal:
+    source: request                           # keys from orkeys request, expire, no renewal
+    ttl: 14d
+    budget:
+      reset: monthly
+      limit: 25
+    max_limit: 100                            # highest --limit a user can ask for
+    max_active: 3                             # active keys per person
+    max_total_limit: 150                      # sum of limits per person
+    notify_before: 3d                         # expiry_notice 3d before expiry
+    alert_channel: notifications              # alerts go to the team notifications channel
+    providers: [openrouter]
+  local:
+    source: request
+    ttl: 7d
+    max_limit: 20                             # also the default limit
+    max_active: 2
+    notify_before: 1d
+    alert_channel: notifications
+    providers: [openrouter]
+
+providers:
+  openrouter:
+    management_key: secret/orkeys/providers/openrouter   # secret with field "key"
+  deepinfra:
+    management_key: secret/orkeys/providers/deepinfra    # read only, see README
+
+clusters:
+  prod-eu:                                    # cluster name used in consumers
+    context: arn:aws:eks:eu-west-1:123456789012:cluster/prod-eu
+
+github:
+  org: example-org                            # hygiene revokes keys of people not in this org

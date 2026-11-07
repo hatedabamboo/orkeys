@@ -11,33 +11,33 @@ PLATFORMS := darwin/amd64 darwin/arm64 linux/amd64 linux/arm64 windows/amd64
 .DEFAULT_GOAL := build
 .PHONY: build install test vet fmt fmt-check check lint tidy release snapshot clean help bump-patch bump-minor bump-major
 
-build: ## Build the binary for this machine
+build:
 	go build $(GOFLAGS) -ldflags "$(LDFLAGS)" -o $(BINARY) $(PKG)
 
-install: ## Install into $(go env GOPATH)/bin
+install:
 	go install $(GOFLAGS) -ldflags "$(LDFLAGS)" $(PKG)
 
-test: ## Run unit tests
+test:
 	go test ./...
 
-vet: ## Run go vet
+vet:
 	go vet ./...
 
-fmt: ## Format the code
+fmt:
 	gofmt -w .
 
-fmt-check: ## Fail if code is not formatted
+fmt-check:
 	@out="$$(gofmt -l .)"; if [ -n "$$out" ]; then echo "not formatted:"; echo "$$out"; exit 1; fi
 
-check: fmt-check vet test ## Run format check, vet and tests
+check: fmt-check vet test
 
-lint: ## Run golangci-lint via go run
+lint:
 	go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_VERSION) run
 
-tidy: ## Tidy go.mod and go.sum
+tidy:
 	go mod tidy
 
-release: clean ## Cross-compile into dist/ for all PLATFORMS
+release: clean
 	@mkdir -p $(DIST)
 	@for p in $(PLATFORMS); do \
 		os=$${p%/*}; arch=$${p#*/}; ext=; [ "$$os" = windows ] && ext=.exe; \
@@ -47,19 +47,19 @@ release: clean ## Cross-compile into dist/ for all PLATFORMS
 	done
 	@cd $(DIST) && shasum -a 256 * > SHA256SUMS
 
-snapshot: ## Local GoReleaser build into dist/, no publish
+snapshot:
 	go run github.com/goreleaser/goreleaser/v2@$(GORELEASER_VERSION) release --snapshot --clean
 
-clean: ## Remove build output
+clean:
 	rm -rf $(BINARY) $(DIST)
 
-bump-patch: ## Bump patch version in VERSION (v1.2.3 -> v1.2.4)
+bump-patch:
 	@$(call bump,patch)
 
-bump-minor: ## Bump minor version in VERSION (v1.2.3 -> v1.3.0)
+bump-minor:
 	@$(call bump,minor)
 
-bump-major: ## Bump major version in VERSION (v1.2.3 -> v2.0.0)
+bump-major:
 	@$(call bump,major)
 
 define bump
@@ -76,5 +76,5 @@ define bump
 	echo "$$cur -> $$new"
 endef
 
-help: ## Show targets
+help:
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk -F':.*?## ' '{printf "  %-10s %s\n", $$1, $$2}'
