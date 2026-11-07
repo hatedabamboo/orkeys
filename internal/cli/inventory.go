@@ -175,7 +175,7 @@ func (a *app) rotateCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringSliceVar(&opt.Retry, "retry", nil, "retry a failed rotation of these keys")
-	cmd.Flags().StringSliceVar(&opt.Now, "now", nil, "rotate these production keys now, before they are due")
+	cmd.Flags().StringSliceVar(&opt.Now, "now", nil, "rotate these manifest keys now, before they are due")
 	cmd.Flags().StringSliceVar(&opt.Only, "only", nil, "process only these keys")
 	return cmd
 }

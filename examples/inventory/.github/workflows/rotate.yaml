@@ -1,0 +1,70 @@
+name: Rotate
+
+on:
+  schedule:
+    - cron: "17 * * * *"                      # hourly: rotation steps and revoke checks span several runs
+  workflow_dispatch:
+    inputs:
+      now:
+        description: Comma-separated keys to rotate now
+        default: ""
+      retry:
+        description: Comma-separated keys with a failed rotation to retry
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: orkeys-state                         # one state-changing run at a time
+  cancel-in-progress: false
+
+env:
+  ORKEYS_VERSION: v0.2.0
+  VAULT_ADDR: ${{ vars.VAULT_ADDR }}
+
+jobs:
+  rotate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup golang
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: stable
+
+      - name: Install orkeys
+        run: go install "github.com/hatedabamboo/orkeys@$ORKEYS_VERSION"
+
+      - name: Configure kubectl # one context per cluster in policy.yaml clusters
+        env:
+          KUBECONFIG_DATA: ${{ secrets.KUBECONFIG }}
+        run: |
+          mkdir -p ~/.kube
+          printf '%s' "$KUBECONFIG_DATA" > ~/.kube/config
+          chmod 600 ~/.kube/config
+
+      - name: Rotate the keys
+        env:
+          VAULT_ROLE_ID: ${{ secrets.VAULT_ROLE_ID }} # AppRole with write access to state and secrets
+          VAULT_SECRET_ID: ${{ secrets.VAULT_SECRET_ID }}
+          NOW: ${{ inputs.now }}
+          RETRY: ${{ inputs.retry }}
+        run: |
+          args=()
+          if [ -n "$NOW" ]; then args+=(--now "$NOW"); fi
+          if [ -n "$RETRY" ]; then args+=(--retry "$RETRY"); fi
+          orkeys rotate "${args[@]}" --json > orkeys-output.json
+
+      - name: Events # orkeys only prints events; send them on from here if needed
+        if: always()
+        run: |
+          [ -s orkeys-output.json ] || exit 0
+          {
+            echo "| Level | Type | Key | Channel | Message |"
+            echo "|---|---|---|---|---|"
+            jq -r '.events[] | "| \(.level) | \(.type) | `\(.key)` | \(.channel // "") | \(.message) |"' orkeys-output.json
+            jq -r 'if .error then "\n**Error:** \(.error)" else empty end' orkeys-output.json
+          } >> "$GITHUB_STEP_SUMMARY"

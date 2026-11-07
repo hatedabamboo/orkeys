@@ -4,7 +4,7 @@
 [![Go Reference](https://pkg.go.dev/badge/github.com/hatedabamboo/orkeys.svg)](https://pkg.go.dev/github.com/hatedabamboo/orkeys)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-orkeys (pronounced "ORKies") manages LLM API keys. It has two modes:
+`orkeys` (pronounced "ORKies") is an IaC for your LLM API keys. `orkeys` manages LLM API keys. It has two modes:
 
 - **Provider commands** manage keys at one provider directly: `orkeys openrouter` (`or`) and `orkeys deepinfra` (`di`).
 - **Inventory mode** manages keys of all providers from an inventory repository, with state and secrets in Vault or
@@ -136,6 +136,8 @@ Providers: OpenRouter (read and write), DeepInfra (read only: spend, limits and 
 limiting and revoking keys fail, see [DeepInfra](#deepinfra)).
 
 To start, copy [`examples/inventory`](examples/inventory) and run `orkeys validate --repo <dir>`.
+[`examples/inventory/.github/workflows`](examples/inventory/.github/workflows) has GitHub Actions workflows for
+`rotate` (hourly) and `hygiene` (weekly). They log in to Vault with AppRole and write the events to the run summary.
 
 ### Commands
 
@@ -515,7 +517,7 @@ Layout:
 | `internal/exporter` | Prometheus metrics |
 | `internal/kube`, `internal/deliver`, `internal/github` | kubectl, age delivery, org membership |
 | `internal/cli` | cobra commands: `openrouter.go`, `deepinfra.go`, `inventory.go`, `exporter_cmd.go`; wiring in `wire.go`, output in `render.go` |
-| `examples/inventory` | example inventory repository; a test keeps it valid |
+| `examples/inventory` | example inventory repository with rotate and hygiene workflows; a test keeps it valid |
 | `internal/values` | input parsing and formatting |
 
 ### Releasing
