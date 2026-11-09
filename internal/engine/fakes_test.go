@@ -163,11 +163,36 @@ func (d *fakeDeliverer) Deliver(_ context.Context, user, name, secret string) (s
 type fakeOrg struct {
 	members  map[string]bool
 	checkErr error
+	teams    map[string][]string // GitHub team slug -> members
 }
 
 func (o *fakeOrg) Check(context.Context) error { return o.checkErr }
 
 func (o *fakeOrg) IsMember(_ context.Context, u string) (bool, error) { return o.members[u], nil }
+
+func (o *fakeOrg) CheckTeam(_ context.Context, slug string) error {
+	if _, ok := o.teams[slug]; !ok {
+		return fmt.Errorf("%s: github team not found", slug)
+	}
+	return nil
+}
+
+func (o *fakeOrg) IsTeamMember(ctx context.Context, slug, u string) (bool, error) {
+	ms, err := o.TeamMembers(ctx, slug)
+	for _, m := range ms {
+		if strings.EqualFold(m, u) {
+			return true, nil
+		}
+	}
+	return false, err
+}
+
+func (o *fakeOrg) TeamMembers(ctx context.Context, slug string) ([]string, error) {
+	if err := o.CheckTeam(ctx, slug); err != nil {
+		return nil, err
+	}
+	return o.teams[slug], nil
+}
 
 type clock struct{ t time.Time }
 

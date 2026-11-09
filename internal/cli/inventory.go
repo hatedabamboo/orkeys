@@ -189,7 +189,8 @@ func (a *app) requestCmd() *cobra.Command {
 		Use:   "request",
 		Short: "Issue a self-service key, encrypted to the user's GitHub SSH keys",
 		Example: `  orkeys request --user jdoe --kind personal --provider openrouter --purpose "persona evals" --limit 30
-  orkeys request --user jdoe --kind local --provider openrouter --purpose "local dev"`,
+  orkeys request --user jdoe --kind local --provider openrouter --purpose "local dev"
+  orkeys request --user jdoe --team search --kind local --provider openrouter --purpose "local dev"`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if r.User == "" || r.Provider == "" || r.Kind == "" {
@@ -214,6 +215,7 @@ func (a *app) requestCmd() *cobra.Command {
 	}
 	f := cmd.Flags()
 	f.StringVar(&r.User, "user", "", "GitHub login of the requester")
+	f.StringVar(&r.Team, "team", "", "team of the requester (required if the requester is in several teams)")
 	f.StringVar(&r.Kind, "kind", "", "a kind with source: request in policy.yaml")
 	f.StringVar(&r.Provider, "provider", "", "provider name")
 	f.StringVar(&r.Purpose, "purpose", "", "what the key is for (required)")

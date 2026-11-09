@@ -67,7 +67,7 @@ Environment for inventory commands:
   VAULT_ADDR, VAULT_TOKEN         Vault access (or VAULT_ROLE_ID + VAULT_SECRET_ID, or VAULT_K8S_ROLE)
   AWS_REGION, AWS_PROFILE, ...    AWS access for s3:// state and aws secrets
   ORKEYS_<PROVIDER>_KEY           management key; overrides providers.<name>.management_key
-  ` + EnvGitHubToken + `                    org membership checks in hygiene`,
+  ` + EnvGitHubToken + `                    team members from GitHub teams; org membership checks in hygiene`,
 		Version:       a.version,
 		Args:          cobra.NoArgs,
 		SilenceUsage:  true,

@@ -23,10 +23,15 @@ This project uses [Semantic Versioning](https://semver.org/).
 - Prometheus exporter; it can read `policy.yaml` with `--policy`.
 - Vault AppRole and Kubernetes auth.
 - Dockerfile.
+- Team members from GitHub teams. A `team.yaml` without `members` uses the GitHub team with the same slug, or
+  `github_team: <slug>`. `request`, `hygiene` and `plan` read it with `GITHUB_TOKEN` (`read:org`).
+- `orkeys request --team <name>` chooses the team of a person who is in more than one team.
 
 ### Changed
 
 - OpenRouter key commands moved under `orkeys openrouter` (`or`): `orkeys list` is now `orkeys or list`.
+- `request` fails when the person is in more than one team and `--team` is not set. Before, the first team in
+  alphabetical order was used.
 
 ### Removed
 

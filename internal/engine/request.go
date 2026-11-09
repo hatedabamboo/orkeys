@@ -18,6 +18,7 @@ var unsafeName = regexp.MustCompile(`[^a-z0-9-]+`)
 
 type Request struct {
 	User     string
+	Team     string
 	Kind     string
 	Provider string
 	Purpose  string
@@ -46,9 +47,9 @@ func (e *Engine) Request(ctx context.Context, r Request) (*Issued, error) {
 	if strings.TrimSpace(r.Purpose) == "" {
 		return nil, errors.New("purpose is required")
 	}
-	team := e.Inv.TeamOf(r.User)
-	if team == nil {
-		return nil, fmt.Errorf("%s is not a member of any team in teams/*/team.yaml", r.User)
+	team, err := e.teamOf(ctx, r.User, r.Team)
+	if err != nil {
+		return nil, err
 	}
 	limit := r.LimitUSD
 	if limit == 0 {

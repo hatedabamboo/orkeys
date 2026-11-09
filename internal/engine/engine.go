@@ -27,6 +27,9 @@ type Deliverer interface {
 type OrgChecker interface {
 	Check(ctx context.Context) error
 	IsMember(ctx context.Context, user string) (bool, error)
+	CheckTeam(ctx context.Context, slug string) error
+	IsTeamMember(ctx context.Context, slug, user string) (bool, error)
+	TeamMembers(ctx context.Context, slug string) ([]string, error)
 }
 
 type Engine struct {

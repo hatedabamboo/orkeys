@@ -30,8 +30,8 @@ func TestLoadValid(t *testing.T) {
 	if inv.Policy.Kind("local").Budget.Limit != 20 || inv.Policy.Kind("personal").MaxActive != 2 {
 		t.Fatal("self-service defaults")
 	}
-	if inv.TeamOf("ASmith") == nil || inv.TeamOf("nobody") != nil {
-		t.Fatal("TeamOf")
+	if !inv.Teams["chat-core"].HasMember("ASmith") || inv.Teams["chat-core"].GitHubSlug("acme") != "" {
+		t.Fatal("static members")
 	}
 }
 
@@ -417,5 +417,43 @@ func TestDuplicateImport(t *testing.T) {
 	}
 	if ps := fmt.Sprint(inv.Validate()); !strings.Contains(ps, "import.id: already imported by prod-chat-core-a") {
 		t.Fatalf("duplicate import not found: %s", ps)
+	}
+}
+
+func TestGitHubTeam(t *testing.T) {
+	cases := []struct{ name, team, org, want, slug string }{
+		{"default slug", "team: chat-core\n", "acme", "", "chat-core"},
+		{"own slug", "team: chat-core\ngithub_team: chat\n", "acme", "", "chat"},
+		{"static", "team: chat-core\nmembers: [jdoe]\n", "acme", "", ""},
+		{"no org, no members", "team: chat-core\n", "", "", ""},
+		{"both", "team: chat-core\nmembers: [jdoe]\ngithub_team: chat\n", "acme", "members and github_team: set only one", ""},
+		{"no org", "team: chat-core\ngithub_team: chat\n", "", "github_team: needs github.org", ""},
+		{"bad slug", "team: chat-core\ngithub_team: Chat Core\n", "acme", "not a GitHub team slug", ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			root := copyRepo(t)
+			_ = os.WriteFile(filepath.Join(root, "teams/chat-core/team.yaml"), []byte(c.team), 0o644)
+			pol, _ := os.ReadFile(filepath.Join(root, "policy.yaml"))
+			pol = []byte(strings.Replace(string(pol), "github:\n  org: example\n", "github: {org: \""+c.org+"\"}\n", 1))
+			_ = os.WriteFile(filepath.Join(root, "policy.yaml"), pol, 0o644)
+			inv, err := Load(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var all []string
+			for _, p := range inv.Validate() {
+				all = append(all, p.String())
+			}
+			got := strings.Join(all, "\n")
+			if (c.want == "" && got != "") || (c.want != "" && !strings.Contains(got, c.want)) {
+				t.Fatalf("want %q, got:\n%s", c.want, got)
+			}
+			if c.want == "" {
+				if s := inv.Teams["chat-core"].GitHubSlug(inv.Policy.GitHub.Org); s != c.slug {
+					t.Fatalf("slug %q, want %q", s, c.slug)
+				}
+			}
+		})
 	}
 }

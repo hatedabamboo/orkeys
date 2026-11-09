@@ -101,18 +101,14 @@ func (inv *Inventory) Key(name string) *Key {
 	return nil
 }
 
-func (inv *Inventory) TeamOf(login string) *Team {
+// TeamNames returns the team names in sorted order.
+func (inv *Inventory) TeamNames() []string {
 	names := make([]string, 0, len(inv.Teams))
 	for n := range inv.Teams {
 		names = append(names, n)
 	}
 	sort.Strings(names)
-	for _, n := range names {
-		if inv.Teams[n].HasMember(login) {
-			return inv.Teams[n]
-		}
-	}
-	return nil
+	return names
 }
 
 func (p *Policy) setDefaults() {

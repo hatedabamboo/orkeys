@@ -75,6 +75,14 @@ func (inv *Inventory) Validate() []Problem {
 		if t.Team != dir {
 			add(path, "team: %q must match the directory name %q", t.Team, dir)
 		}
+		switch {
+		case len(t.Members) > 0 && t.GitHubTeam != "":
+			add(path, "members and github_team: set only one")
+		case t.GitHubTeam != "" && pol.GitHub.Org == "":
+			add(path, "github_team: needs github.org in policy.yaml")
+		case t.GitHubTeam != "" && !teamSlug.MatchString(t.GitHubTeam):
+			add(path, "github_team: %q is not a GitHub team slug", t.GitHubTeam)
+		}
 		for field, ch := range map[string]string{"notifications": t.Channels.Notifications, "alerts": t.Channels.Alerts} {
 			if strings.ContainsAny(ch, " \t\n") {
 				add(path, "channels.%s: %q has whitespace", field, ch)
@@ -160,6 +168,8 @@ func (inv *Inventory) Validate() []Problem {
 	slices.SortFunc(ps, func(a, b Problem) int { return strings.Compare(a.String(), b.String()) })
 	return ps
 }
+
+var teamSlug = regexp.MustCompile(`^[a-z0-9][a-z0-9_.-]*$`)
 
 var kindName = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
 
