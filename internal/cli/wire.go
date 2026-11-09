@@ -37,6 +37,9 @@ func (a *app) loadInventory() (*manifest.Inventory, error) {
 		}
 		return nil, fmt.Errorf("%d problem(s) in %s:%s", len(ps), a.repo, b.String())
 	}
+	for _, p := range inv.Warnings() {
+		fmt.Fprintf(os.Stderr, "warning: %s\n", p)
+	}
 	return inv, nil
 }
 

@@ -131,9 +131,6 @@ func (p *Policy) setDefaults() {
 		if kp.Source == "" {
 			kp.Source = SourceManifest
 		}
-		if kp.AlertChannel == "" {
-			kp.AlertChannel = ChannelAlerts
-		}
 		if kp.Budget.Limit == 0 {
 			kp.Budget.Limit = kp.MaxLimit
 		}

@@ -203,7 +203,6 @@ its keys are made and how they end:
 | `budget.reset` | all | `monthly` | Default limit period: `daily`, `weekly` or `monthly`. Requested keys always use it |
 | `budget.limit` | all | `max_limit` | Default limit in USD when the manifest or the request gives none |
 | `max_limit` | all | none (required for `request`) | Highest allowed limit |
-| `alert_channel` | all | `alerts` | Team channel for `alert` events and the `alert_channel` label: `alerts` or `notifications` |
 | `rotate_before` | `manifest` | `3d` | Start rotation this long before expiry. Must be shorter than `ttl` |
 | `revoke_grace` | `manifest` | `24h` | Keep the old key this long after consumers switched |
 | `notify_before` | `request` | none | Send `expiry_notice` this long before expiry |
@@ -228,7 +227,6 @@ kinds:
     max_limit: 100
     max_active: 3
     notify_before: 3d
-    alert_channel: notifications
     providers: [openrouter]
 ```
 
@@ -241,11 +239,19 @@ another kind.
 ```yaml
 team: search                         # must match the directory name
 channels:
-  notifications: "#search-notifications"   # info events; alerts of kinds with alert_channel: notifications
-  alerts: "#search-alerts"                 # alerts of the other kinds
+  notifications: "#search-notifications"   # info events; alerts of keys of source: request kinds
+  alerts: "#search-alerts"                 # alerts of keys of source: manifest kinds
 github_team: search-eng             # optional; GitHub team slug if it is not the team name
 # members: [alice, bob]              # optional; static GitHub logins instead of a GitHub team
 ```
+
+| Event level | Key kind `source` | Channel |
+|---|---|---|
+| `info` | all | `channels.notifications` |
+| `alert` | `request` | `channels.notifications` |
+| `alert` | `manifest` | `channels.alerts` |
+
+`kinds.<kind>.alert_channel` is deprecated. orkeys ignores it and prints a warning.
 
 Members of a team may request keys. orkeys reads them from one of two places:
 
@@ -455,8 +461,8 @@ OpenRouter keys also get a native expiry at `ttl`. DeepInfra keys have none; ork
 ### Requested keys
 
 Keys of a kind with `source: request` have no manifest. A team member requests one with a purpose. orkeys checks the
-kind limits per person and keeps owner, team and purpose in the state. Alerts use the team channel from the kind
-`alert_channel`. At expiry, `rotate` revokes the key and deletes its state; there is no renewal. If the kind has
+kind limits per person and keeps owner, team and purpose in the state. Alerts go to the team
+`channels.notifications`. At expiry, `rotate` revokes the key and deletes its state; there is no renewal. If the kind has
 `notify_before`, orkeys emits `expiry_notice` that long before expiry.
 
 orkeys finds the team of `--user` in `members` or in the GitHub team. If the user is in more than one team, `request`

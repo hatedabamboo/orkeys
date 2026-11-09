@@ -19,11 +19,6 @@ const (
 	SourceRequest  = "request"
 )
 
-const (
-	ChannelAlerts        = "alerts"
-	ChannelNotifications = "notifications"
-)
-
 func (p *Policy) Kind(name string) *KindPolicy { return p.Kinds[name] }
 
 // Requested reports whether keys of the kind are issued with orkeys request.
@@ -78,11 +73,12 @@ type GitHubConfig struct {
 }
 
 type KindPolicy struct {
-	Source        string   `yaml:"source"`
-	TTL           Duration `yaml:"ttl"`
-	Providers     []string `yaml:"providers"`
-	Budget        Budget   `yaml:"budget"`
-	MaxLimit      float64  `yaml:"max_limit"`
+	Source    string   `yaml:"source"`
+	TTL       Duration `yaml:"ttl"`
+	Providers []string `yaml:"providers"`
+	Budget    Budget   `yaml:"budget"`
+	MaxLimit  float64  `yaml:"max_limit"`
+	// Deprecated: ignored. The alert channel follows Source. Remove in the next release.
 	AlertChannel  string   `yaml:"alert_channel"`
 	RotateBefore  Duration `yaml:"rotate_before"`
 	RevokeGrace   Duration `yaml:"revoke_grace"`
@@ -95,8 +91,10 @@ func (kp *KindPolicy) AllowsProvider(name string) bool {
 	return len(kp.Providers) == 0 || slices.Contains(kp.Providers, name)
 }
 
+// ChannelFor returns the team channel for alert events of a key of kind kp:
+// channels.notifications for source: request, channels.alerts for source: manifest.
 func (t *Team) ChannelFor(kp *KindPolicy) string {
-	if kp != nil && kp.AlertChannel == ChannelNotifications {
+	if kp != nil && kp.Source == SourceRequest {
 		return t.Channels.Notifications
 	}
 	return t.Channels.Alerts

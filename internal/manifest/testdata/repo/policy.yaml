@@ -7,7 +7,6 @@ kinds:
     budget: {reset: monthly, limit: 200}
   personal:
     source: request
-    alert_channel: notifications
     ttl: 14d
     budget: {limit: 25}
     max_limit: 100
@@ -17,7 +16,6 @@ kinds:
     providers: [openrouter, deepinfra]
   local:
     source: request
-    alert_channel: notifications
     ttl: 7d
     max_limit: 20
     max_active: 1

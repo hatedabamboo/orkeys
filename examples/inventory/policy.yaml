@@ -22,7 +22,6 @@ kinds:
     max_active: 3                             # active keys per person
     max_total_limit: 150                      # sum of limits per person
     notify_before: 3d                         # expiry_notice 3d before expiry
-    alert_channel: notifications              # alerts go to the team notifications channel
     providers: [openrouter]
   local:
     source: request
@@ -30,7 +29,6 @@ kinds:
     max_limit: 20                             # also the default limit
     max_active: 2
     notify_before: 1d
-    alert_channel: notifications
     providers: [openrouter]
 
 providers:

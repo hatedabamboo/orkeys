@@ -15,7 +15,7 @@ This project uses [Semantic Versioning](https://semver.org/).
 - State in Vault or S3, secrets in Vault or AWS Secrets Manager.
 - State lock: S3 conditional writes or Vault check-and-set.
 - Key kinds defined in `policy.yaml`: any name, `source: manifest` (rotated) or `source: request` (self-service,
-  expires). Each kind sets TTL, default and maximum limit, limit period, allowed providers and alert channel.
+  expires). Each kind sets TTL, default and maximum limit, limit period and allowed providers.
 - `import: {id, name}` in a manifest adopts an existing provider key; `orkeys import` prints such manifests.
 - One `budget: {reset, limit}` per key: the limit at the provider and its period. Spend metrics follow the period.
 - Self-service keys with per-person limits, encrypted with age to GitHub SSH keys.
@@ -34,6 +34,14 @@ This project uses [Semantic Versioning](https://semver.org/).
 - OpenRouter key commands moved under `orkeys openrouter` (`or`): `orkeys list` is now `orkeys or list`.
 - `request` fails when the person is in more than one team and `--team` is not set. Before, the first team in
   alphabetical order was used.
+- Alerts go to a team channel by kind `source`: `request` to `channels.notifications`, `manifest` to
+  `channels.alerts`. `plan` shows a `channels.alerts` change for existing keys of request kinds that sent alerts to
+  `channels.alerts`. The state field and the exporter label `alert_channel` do not change.
+
+### Deprecated
+
+- `kinds.<kind>.alert_channel` in `policy.yaml`. orkeys ignores it and prints a warning. The next release rejects it
+  as an unknown field.
 
 ### Removed
 
