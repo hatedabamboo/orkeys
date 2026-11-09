@@ -2,6 +2,8 @@ package vault
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -23,6 +25,9 @@ const (
 	EnvRoleID       = "VAULT_ROLE_ID"
 	EnvSecretID     = "VAULT_SECRET_ID"
 	EnvAppRoleMount = "VAULT_APPROLE_MOUNT"
+	EnvClientCert   = "VAULT_CLIENT_CERT"
+	EnvClientKey    = "VAULT_CLIENT_KEY"
+	EnvCACert       = "VAULT_CACERT"
 	saTokenPath     = "/var/run/secrets/kubernetes.io/serviceaccount/token"
 )
 
@@ -47,6 +52,15 @@ func NewFromEnv(ctx context.Context) (*Client, error) {
 	}
 	c := New(addr, strings.TrimSpace(os.Getenv(EnvToken)))
 	c.namespace = os.Getenv(EnvNamespace)
+	tlsCfg, err := tlsConfigFromEnv()
+	if err != nil {
+		return nil, err
+	}
+	if tlsCfg != nil {
+		tr := http.DefaultTransport.(*http.Transport).Clone()
+		tr.TLSClientConfig = tlsCfg
+		c.http.Transport = tr
+	}
 	if c.token != "" {
 		return c, nil
 	}
@@ -77,6 +91,42 @@ func NewFromEnv(ctx context.Context) (*Client, error) {
 	}
 	c.token = tok
 	return c, nil
+}
+
+// tlsConfigFromEnv returns nil when no TLS variable is set.
+func tlsConfigFromEnv() (*tls.Config, error) {
+	certFile := strings.TrimSpace(os.Getenv(EnvClientCert))
+	keyFile := strings.TrimSpace(os.Getenv(EnvClientKey))
+	caFile := strings.TrimSpace(os.Getenv(EnvCACert))
+	if certFile == "" && keyFile == "" && caFile == "" {
+		return nil, nil
+	}
+	if (certFile == "") != (keyFile == "") {
+		return nil, errors.New("set both " + EnvClientCert + " and " + EnvClientKey)
+	}
+	cfg := &tls.Config{MinVersion: tls.VersionTLS12}
+	if certFile != "" {
+		pair, err := tls.LoadX509KeyPair(certFile, keyFile)
+		if err != nil {
+			return nil, fmt.Errorf("%s, %s: %w", EnvClientCert, EnvClientKey, err)
+		}
+		cfg.Certificates = []tls.Certificate{pair}
+	}
+	if caFile != "" {
+		pool, err := x509.SystemCertPool()
+		if err != nil {
+			pool = x509.NewCertPool()
+		}
+		pem, err := os.ReadFile(caFile)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", EnvCACert, err)
+		}
+		if !pool.AppendCertsFromPEM(pem) {
+			return nil, fmt.Errorf("%s: no PEM certificates in %s", EnvCACert, caFile)
+		}
+		cfg.RootCAs = pool
+	}
+	return cfg, nil
 }
 
 func envOr(name, def string) string {
