@@ -476,7 +476,7 @@ func TestCustomRequestKind(t *testing.T) {
 		t.Fatal(err)
 	}
 	st := v.store.states[is.Name]
-	if !strings.HasPrefix(is.Name, "contractor-jdoe-") || is.LimitUSD != 10 || is.LimitReset != "weekly" || st.LimitReset != "weekly" || v.or.keys[len(v.or.keys)-1].LimitReset != "weekly" || st.AlertChannel != "#chat-core-alerts" {
+	if !strings.HasPrefix(is.Name, "contractor-jdoe-") || is.LimitUSD != 10 || is.LimitReset != "weekly" || st.LimitReset != "weekly" || v.or.keys[len(v.or.keys)-1].LimitReset != "weekly" || st.AlertChannel != "#chat-core-notifications" {
 		t.Fatalf("issued %+v state %+v", is, st)
 	}
 	if list, err := v.e.Issued(context.Background(), IssuedFilter{Kind: "contractor"}); err != nil || len(list) != 1 {

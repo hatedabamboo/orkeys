@@ -27,6 +27,18 @@ type Problem struct {
 
 func (p Problem) String() string { return p.Path + ": " + p.Msg }
 
+// Warnings returns problems that do not stop a command.
+func (inv *Inventory) Warnings() []Problem {
+	var ps []Problem
+	for _, name := range slices.Sorted(maps.Keys(inv.Policy.Kinds)) {
+		if kp := inv.Policy.Kinds[name]; kp != nil && kp.AlertChannel != "" {
+			ps = append(ps, Problem{Path: "policy.yaml", Msg: fmt.Sprintf(
+				"kinds.%s.alert_channel: deprecated and ignored; alerts of source: request kinds go to channels.notifications, of source: manifest kinds to channels.alerts", name)})
+		}
+	}
+	return ps
+}
+
 func (inv *Inventory) Validate() []Problem {
 	var ps []Problem
 	add := func(path, format string, args ...any) {
@@ -194,9 +206,6 @@ func validateKind(pol *Policy, name string, add func(string, string, ...any)) {
 	}
 	if !slices.Contains(resets, kp.Budget.Reset) {
 		add("policy.yaml", "%s.budget.reset: want daily, weekly or monthly", at)
-	}
-	if kp.AlertChannel != ChannelAlerts && kp.AlertChannel != ChannelNotifications {
-		add("policy.yaml", "%s.alert_channel: want alerts or notifications", at)
 	}
 	for _, p := range kp.Providers {
 		if _, ok := pol.Providers[p]; !ok {

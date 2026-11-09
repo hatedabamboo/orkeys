@@ -343,7 +343,6 @@ func TestKindPolicyProblems(t *testing.T) {
 		"ttl under rotate": {"  batch: {ttl: 2d}\n", "kinds.batch.ttl: must be longer than rotate_before"},
 		"default over max": {"  batch: {ttl: 30d, budget: {limit: 9}, max_limit: 5}\n", "kinds.batch.budget.limit: more than max_limit"},
 		"bad reset":        {"  batch: {ttl: 30d, budget: {reset: yearly}}\n", "kinds.batch.budget.reset: want daily, weekly or monthly"},
-		"bad channel":      {"  batch: {ttl: 30d, alert_channel: pager}\n", "alert_channel: want alerts or notifications"},
 		"unknown provider": {"  batch: {ttl: 30d, providers: [openai]}\n", `kinds.batch.providers: "openai" is not in providers`},
 		"bad name":         {"  Batch_1: {ttl: 30d}\n", "kinds.Batch_1: name must match"},
 	}
@@ -455,5 +454,30 @@ func TestGitHubTeam(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestAlertChannelDeprecated(t *testing.T) {
+	inv, err := Load(withKinds(t, "  batch: {ttl: 30d, alert_channel: \"#team-notifications\"}\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ps := inv.Validate(); len(ps) != 0 {
+		t.Fatalf("problems %v", ps)
+	}
+	ws := inv.Warnings()
+	if len(ws) != 1 || !strings.Contains(ws[0].String(), "kinds.batch.alert_channel: deprecated") {
+		t.Fatalf("warnings %v", ws)
+	}
+	team := &Team{}
+	team.Channels.Notifications, team.Channels.Alerts = "#n", "#a"
+	if ch := team.ChannelFor(inv.Policy.Kind("batch")); ch != "#a" {
+		t.Fatalf("manifest kind: channel %q", ch)
+	}
+	if ch := team.ChannelFor(inv.Policy.Kind("personal")); ch != "#n" {
+		t.Fatalf("request kind: channel %q", ch)
+	}
+	if ch := team.ChannelFor(nil); ch != "#a" {
+		t.Fatalf("unknown kind: channel %q", ch)
 	}
 }
