@@ -1,6 +1,6 @@
 module github.com/hatedabamboo/orkeys
 
-go 1.24.2
+go 1.26.0
 
 require (
 	filippo.io/age v1.2.1
@@ -10,8 +10,8 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/secretsmanager v1.50.10
 	github.com/aws/smithy-go v1.28.8
 	github.com/spf13/cobra v1.10.2
-	golang.org/x/crypto v0.24.0
-	golang.org/x/term v0.34.0
+	golang.org/x/crypto v0.58.0
+	golang.org/x/term v0.47.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 
@@ -33,5 +33,5 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/sts v1.51.8 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/spf13/pflag v1.0.9 // indirect
-	golang.org/x/sys v0.38.0 // indirect
+	golang.org/x/sys v0.49.0 // indirect
 )
