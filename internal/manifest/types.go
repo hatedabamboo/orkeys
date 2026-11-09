@@ -118,9 +118,24 @@ type Team struct {
 		Notifications string `yaml:"notifications"`
 		Alerts        string `yaml:"alerts"`
 	} `yaml:"channels"`
-	Members []string `yaml:"members"`
+	Members    []string `yaml:"members"`
+	GitHubTeam string   `yaml:"github_team"`
 
 	Dir string `yaml:"-"`
+}
+
+// GitHubSlug returns the slug of the GitHub team that holds the members, or "" when the members are static.
+// Without members and github_team, the slug is the team name if org is set.
+func (t *Team) GitHubSlug(org string) string {
+	switch {
+	case len(t.Members) > 0:
+		return ""
+	case t.GitHubTeam != "":
+		return t.GitHubTeam
+	case org != "":
+		return t.Team
+	}
+	return ""
 }
 
 func (t *Team) HasMember(login string) bool {

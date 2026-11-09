@@ -69,6 +69,15 @@ func (e *Engine) Plan(ctx context.Context) (*Plan, error) {
 	}
 
 	plan := &Plan{Actions: []Action{}, Unmanaged: []ForeignKey{}, Warnings: []string{}}
+	if e.Org != nil {
+		for _, n := range e.Inv.TeamNames() {
+			if slug := e.slugOf(e.Inv.Teams[n]); slug != "" {
+				if err := e.Org.CheckTeam(ctx, slug); err != nil {
+					plan.Warnings = append(plan.Warnings, fmt.Sprintf("teams/%s/team.yaml: %v", n, err))
+				}
+			}
+		}
+	}
 	for _, k := range e.Inv.Keys {
 		p, err := e.Providers.Get(k.Provider)
 		if err != nil {

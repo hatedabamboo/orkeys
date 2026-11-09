@@ -163,7 +163,7 @@ Point orkeys at the repository with `--repo` or `ORKEYS_REPO`.
 
 ```
 policy.yaml                 global settings and rules
-teams/<team>/team.yaml      team routing channels and members
+teams/<team>/team.yaml      team routing channels; members or a GitHub team
 teams/<team>/<key>.yaml     one manifest key per file; file name = key name
 ```
 
@@ -182,7 +182,7 @@ Unknown fields are errors, so a typo does not pass silently.
 | `naming` | `^[a-z0-9][a-z0-9._-]*$` | Regex that every key name must match |
 | `kinds.<name>` | | Key kinds. At least one is required. See below |
 | `clusters.<name>.context` | cluster name | kubectl context for a cluster used in `consumers` |
-| `github.org` | | Org for owner checks in `hygiene` |
+| `github.org` | | Org for owner checks in `hygiene` and for team members from GitHub teams |
 | `github.api_url`, `github.keys_url` | `https://api.github.com`, `https://github.com` | For GitHub Enterprise |
 
 #### Kinds
@@ -243,8 +243,19 @@ team: search                         # must match the directory name
 channels:
   notifications: "#search-notifications"   # info events; alerts of kinds with alert_channel: notifications
   alerts: "#search-alerts"                 # alerts of the other kinds
-members: [alice, bob]                # GitHub logins; may request keys
+github_team: search-eng             # optional; GitHub team slug if it is not the team name
+# members: [alice, bob]              # optional; static GitHub logins instead of a GitHub team
 ```
+
+Members of a team may request keys. orkeys reads them from one of two places:
+
+- **GitHub team (default).** Without `members`, orkeys uses the team `github.com/orgs/<github.org>/teams/<slug>`.
+  The slug is `github_team`, or `team` if `github_team` is not set. Members of child teams count. Pending invitations
+  do not count. This needs `github.org` and `GITHUB_TOKEN` with `read:org`.
+- **Static list.** `members: [alice, bob]` sets the GitHub logins in the file. No token is necessary.
+
+`members` and `github_team` together are an error. `validate` does not use the network. `plan` warns about a GitHub
+team that does not exist, if `GITHUB_TOKEN` is set.
 
 Channels are optional. orkeys sends nothing itself: it puts the channel on events and metrics, so a downstream
 service (Alertmanager, a CI step, a bot) can route them.
@@ -395,7 +406,7 @@ Read-only commands (`plan`, `issued`, `import`) need read access to the state an
 | `VAULT_TOKEN` | Vault stores | Vault token. Or `VAULT_ROLE_ID` + `VAULT_SECRET_ID` (AppRole, mount `VAULT_APPROLE_MOUNT`, default `approle`), or `VAULT_K8S_ROLE` (Kubernetes auth, mount `VAULT_K8S_MOUNT`, default `kubernetes`) |
 | `AWS_REGION`, `AWS_PROFILE`, ... | S3 and Secrets Manager | Standard AWS SDK credential chain: env vars, profile, web identity (GitHub OIDC), pod role |
 | `ORKEYS_<PROVIDER>_KEY`, `ORKEYS_<PROVIDER>_SELF_ID` | all except validate | Management key and its ID; override `management_key` |
-| `GITHUB_TOKEN` | hygiene | Org membership checks (`read:org`). Without it, owner checks are skipped |
+| `GITHUB_TOKEN` | request, hygiene, plan | Team members from GitHub teams and org membership checks (`read:org`). Without it, `request` fails for a GitHub team, `hygiene` skips owner checks, `plan` skips team checks |
 
 AWS permissions: `s3:GetObject`, `s3:PutObject`, `s3:DeleteObject` on `<bucket>/<prefix>/*` and `s3:ListBucket` on the
 bucket; `secretsmanager:GetSecretValue`, `CreateSecret`, `PutSecretValue`, `TagResource`, `DeleteSecret` on the
@@ -446,6 +457,10 @@ kind limits per person and keeps owner, team and purpose in the state. Alerts us
 `alert_channel`. At expiry, `rotate` revokes the key and deletes its state; there is no renewal. If the kind has
 `notify_before`, orkeys emits `expiry_notice` that long before expiry.
 
+orkeys finds the team of `--user` in `members` or in the GitHub team. If the user is in more than one team, `request`
+fails and lists the teams: give one with `--team <name>`. With `--team`, orkeys checks only that team. A missing
+GitHub team or a missing `GITHUB_TOKEN` is an error, not "not a member".
+
 The keys are not stored in the secrets store. orkeys encrypts them with `age` to the owner's SSH keys
 (`ssh-ed25519` or `ssh-rsa`) from `<github.keys_url>/<login>.keys` and writes `<name>.age` to `--out`.
 Decrypt with `age -d -i ~/.ssh/id_ed25519 <file>`.
@@ -454,7 +469,8 @@ Decrypt with `age -d -i ~/.ssh/id_ed25519 <file>`.
 
 `hygiene` revokes requested keys whose owner is not in `github.org`. GitHub answers 404 both for "not a member"
 and for a wrong org name or a token without access, so before any revoke orkeys checks that the org exists and that
-at least one member from `team.yaml` is reported as a member. If not, it revokes nothing and fails. A user who renamed
+at least one team member (from `members` or from the GitHub team) is reported as a member. A GitHub team that does
+not exist also stops the check. If not, it revokes nothing and fails. A user who renamed
 their GitHub login is reported as gone; they can request a new key. Run `--dry-run` first.
 
 ### Exporter

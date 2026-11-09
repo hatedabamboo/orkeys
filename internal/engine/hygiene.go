@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/hatedabamboo/orkeys/internal/provider"
@@ -99,15 +98,9 @@ func (e *Engine) orgSane(ctx context.Context) error {
 	if err := e.Org.Check(ctx); err != nil {
 		return err
 	}
-	seen := map[string]bool{}
-	var members []string
-	for _, t := range e.Inv.Teams {
-		for _, m := range t.Members {
-			if l := strings.ToLower(m); !seen[l] {
-				seen[l] = true
-				members = append(members, m)
-			}
-		}
+	members, err := e.allMembers(ctx)
+	if err != nil {
+		return err
 	}
 	sort.Strings(members)
 	for _, m := range members {
@@ -119,5 +112,5 @@ func (e *Engine) orgSane(ctx context.Context) error {
 			return nil
 		}
 	}
-	return errors.New("no team member in team.yaml is reported as an org member; check the org name and the token scope (read:org)")
+	return errors.New("no team member (team.yaml or GitHub team) is reported as an org member; check the org name and the token scope (read:org)")
 }
