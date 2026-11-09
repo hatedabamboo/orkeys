@@ -404,6 +404,8 @@ Read-only commands (`plan`, `issued`, `import`) need read access to the state an
 |---|---|---|
 | `VAULT_ADDR`, `VAULT_NAMESPACE` | Vault stores | Vault address and optional namespace |
 | `VAULT_TOKEN` | Vault stores | Vault token. Or `VAULT_ROLE_ID` + `VAULT_SECRET_ID` (AppRole, mount `VAULT_APPROLE_MOUNT`, default `approle`), or `VAULT_K8S_ROLE` (Kubernetes auth, mount `VAULT_K8S_MOUNT`, default `kubernetes`) |
+| `VAULT_CLIENT_CERT`, `VAULT_CLIENT_KEY` | Vault stores | PEM client certificate and key for mTLS (for example, Vault behind Teleport app access). Set both or none |
+| `VAULT_CACERT` | Vault stores | PEM CA bundle for the Vault server, added to the system CAs |
 | `AWS_REGION`, `AWS_PROFILE`, ... | S3 and Secrets Manager | Standard AWS SDK credential chain: env vars, profile, web identity (GitHub OIDC), pod role |
 | `ORKEYS_<PROVIDER>_KEY`, `ORKEYS_<PROVIDER>_SELF_ID` | all except validate | Management key and its ID; override `management_key` |
 | `GITHUB_TOKEN` | request, hygiene, plan | Team members from GitHub teams and org membership checks (`read:org`). Without it, `request` fails for a GitHub team, `hygiene` skips owner checks, `plan` skips team checks |

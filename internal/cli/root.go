@@ -65,6 +65,8 @@ manage keys of all providers from an inventory repository, with state and secret
 Environment for inventory commands:
   ` + EnvRepo + `                     inventory repository path (same as --repo)
   VAULT_ADDR, VAULT_TOKEN         Vault access (or VAULT_ROLE_ID + VAULT_SECRET_ID, or VAULT_K8S_ROLE)
+  VAULT_CLIENT_CERT, VAULT_CLIENT_KEY, VAULT_CACERT
+                                  Vault TLS: client certificate and key (mTLS), CA bundle
   AWS_REGION, AWS_PROFILE, ...    AWS access for s3:// state and aws secrets
   ORKEYS_<PROVIDER>_KEY           management key; overrides providers.<name>.management_key
   ` + EnvGitHubToken + `                    team members from GitHub teams; org membership checks in hygiene`,
