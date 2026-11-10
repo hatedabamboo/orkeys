@@ -3,6 +3,7 @@ secrets: vault                                # where keys are written: vault or
 
 envs: [prod, staging, dev]                    # allowed env values in manifests
 name_prefix: "{env}-{team}-"                  # required key name prefix
+track_disabled: true                          # enable keys disabled at the provider but not in manifests
 
 kinds:
   production:                                 # keys from manifests, rotated

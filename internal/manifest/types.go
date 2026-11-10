@@ -64,6 +64,9 @@ type Policy struct {
 	NamePrefix *string                   `yaml:"name_prefix"`
 	GitHub     GitHubConfig              `yaml:"github"`
 	Clusters   map[string]ClusterConfig  `yaml:"clusters"`
+	// TrackDisabled makes plan enforce the disabled status of manifest keys both ways:
+	// it also enables keys that are disabled at the provider but not in the manifest.
+	TrackDisabled bool `yaml:"track_disabled"`
 }
 
 type GitHubConfig struct {
@@ -154,6 +157,7 @@ type Key struct {
 	Description string     `yaml:"description"`
 	Scopes      []string   `yaml:"scopes,omitempty"`
 	Import      *Import    `yaml:"import,omitempty"`
+	Disabled    bool       `yaml:"disabled,omitempty"`
 	Budget      Budget     `yaml:"budget"`
 	TTL         Duration   `yaml:"ttl"`
 	Secret      *Secret    `yaml:"secret,omitempty"`

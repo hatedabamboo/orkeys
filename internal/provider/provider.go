@@ -46,6 +46,8 @@ type Provider interface {
 	Create(ctx context.Context, s Spec) (Key, string, error)
 	SetLimit(ctx context.Context, id string, limitUSD *float64, reset string) error
 	Disable(ctx context.Context, id string) error
+	// Enable undoes Disable. Where Disable sets the limit to 0, Enable does nothing; the caller sets the limit.
+	Enable(ctx context.Context, id string) error
 	Delete(ctx context.Context, id string) error
 	SelfID() string
 }

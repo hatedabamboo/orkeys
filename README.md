@@ -184,6 +184,7 @@ Unknown fields are errors, so a typo does not pass silently.
 | `clusters.<name>.context` | cluster name | kubectl context for a cluster used in `consumers` |
 | `github.org` | | Org for owner checks in `hygiene` and for team members from GitHub teams |
 | `github.api_url`, `github.keys_url` | `https://api.github.com`, `https://github.com` | For GitHub Enterprise |
+| `track_disabled` | `false` | `true`: `plan` also enables manifest keys that are disabled at the provider but not in the manifest. See [Disabling a key](#disabling-a-key) |
 
 #### Kinds
 
@@ -283,6 +284,7 @@ service (Alertmanager, a CI step, a bot) can route them.
 | `secret.path`, `secret.field` | path: yes | Where the key goes. Vault: `<mount>/<path>`; AWS: secret name. Field default `api_key`. Other fields in the same secret are kept |
 | `consumers[]` | no | `type` (`eso` or `direct`), `cluster`, `namespace`, `externalsecret` (eso), `restart` (`deployment/x`, `statefulset/x`, `daemonset/x`, `cronjob/x`). orkeys restarts only what `restart` lists |
 | `import.id`, `import.name` | no | Adopt an existing provider key instead of creating one. `name` is its current name at the provider. See below |
+| `disabled` | no | `true` disables the key at the provider and stops its rotation. Default `false`. See below |
 
 ```yaml
 consumers:
@@ -302,6 +304,29 @@ If a consumer still uses the old key after `revoke_grace`, its spend grows and o
 
 Change `secret.path` or `secret.field` to move a key: orkeys rotates it to the new place and removes the old field after
 the revoke. Delete the manifest to revoke the key; orkeys removes only its own field from the secret.
+
+#### Disabling a key
+
+Set `disabled: true` in the manifest to stop a key and keep its state and secret. `plan` shows `disable`, and `apply`
+disables the key at the provider (`key_disabled` event). OpenRouter has a disabled flag. DeepInfra has none, so orkeys
+sets the limit to 0. A new or imported key with `disabled: true` is disabled right after `apply` creates or adopts it.
+
+A disabled key does not rotate, and `rotate --now` fails for it. `plan` does not change its limit, and `hygiene` does
+not report it as unused. An OpenRouter key still has its native expiry; after it expires, `plan` recreates it as a
+disabled key.
+
+Remove `disabled: true` (or set `false`) to enable the key again. This works only with `track_disabled: true` in
+`policy.yaml`:
+
+| `track_disabled` | Manifest `disabled: true`, key active | Manifest not disabled, key disabled at the provider |
+|---|---|---|
+| `false` (default) | `disable` | nothing; the key stays disabled |
+| `true` | `disable` | `enable`, then the limit is set from `budget` (`key_enabled` event) |
+
+With `track_disabled: true`, a key disabled by hand (`orkeys or disable`) is enabled again on the next `apply`.
+
+`track_disabled` also controls provider keys without a manifest. With `false`, `plan` and `orkeys import` ignore such
+keys when they are disabled. With `true`, `plan` reports them as unmanaged and `orkeys import` prints manifests for them.
 
 #### Importing an existing key
 
@@ -371,6 +396,8 @@ The result key depends on the command: `plan` (apply), `issued` (request), `find
 | `key_issued` | info | A key was created |
 | `key_imported` | info | An existing provider key was adopted |
 | `key_revoked` | info | A key was revoked (manifest removed, expired, owner left) |
+| `key_disabled` | info | A key was disabled (`disabled: true` in the manifest) |
+| `key_enabled` | info | A disabled key was enabled again (`track_disabled: true`) |
 | `rotation_started` | info | A new key was written; consumers sync next |
 | `rotation_synced` | info | Consumers use the new key; the old key will be revoked after `revoke_grace` |
 | `old_key_revoked` | info | The old key of a rotation was revoked |

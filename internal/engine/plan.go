@@ -22,6 +22,8 @@ const (
 	ActReissue     ActionType = "reissue"
 	ActUpdateLimit ActionType = "update-limit"
 	ActUpdateState ActionType = "update-state"
+	ActDisable     ActionType = "disable"
+	ActEnable      ActionType = "enable"
 	ActDelete      ActionType = "delete"
 )
 
@@ -125,7 +127,21 @@ func (e *Engine) Plan(ctx context.Context) (*Plan, error) {
 			continue
 		}
 		caps := p.Caps()
-		if caps.PerKeyLimit && !cur.Disabled {
+		switch {
+		case k.Disabled && !cur.Disabled:
+			a := act
+			a.Type, a.Current, a.Detail = ActDisable, cur, "disabled: true in the manifest"
+			plan.Actions = append(plan.Actions, a)
+		case !k.Disabled && cur.Disabled && e.Inv.Policy.TrackDisabled:
+			a := act
+			a.Type, a.Current = ActEnable, cur
+			a.Detail = "disabled at the provider, not in the manifest (track_disabled)"
+			if caps.PerKeyLimit {
+				a.Detail += fmt.Sprintf("; limit $%.2f %s", limit, k.Budget.ResetOrDefault())
+			}
+			plan.Actions = append(plan.Actions, a)
+		}
+		if caps.PerKeyLimit && !cur.Disabled && !k.Disabled {
 			resetDiff := caps.LimitReset && cur.LimitReset != k.Budget.ResetOrDefault()
 			if cur.LimitUSD == nil || math.Abs(*cur.LimitUSD-limit) > 0.005 || resetDiff {
 				a := act
@@ -161,6 +177,10 @@ func (e *Engine) Plan(ctx context.Context) (*Plan, error) {
 		for _, pk := range keys {
 			id := name + "/" + pk.ID
 			if known[id] != "" || pk.ID == self {
+				continue
+			}
+			// Without track_disabled, a disabled key without a manifest is not reported for import.
+			if pk.Disabled && !e.Inv.Policy.TrackDisabled {
 				continue
 			}
 			plan.Unmanaged = append(plan.Unmanaged, ForeignKey{Provider: name, ID: pk.ID, Name: pk.Name})

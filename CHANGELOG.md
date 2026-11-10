@@ -28,6 +28,10 @@ This project uses [Semantic Versioning](https://semver.org/).
 - Team members from GitHub teams. A `team.yaml` without `members` uses the GitHub team with the same slug, or
   `github_team: <slug>`. `request`, `hygiene` and `plan` read it with `GITHUB_TOKEN` (`read:org`).
 - `orkeys request --team <name>` chooses the team of a person who is in more than one team.
+- `disabled: true` in a key manifest disables the key at the provider and stops its rotation. `track_disabled: true`
+  in `policy.yaml` also enables keys that are disabled at the provider but not in the manifest. New events:
+  `key_disabled`, `key_enabled`. With `track_disabled: false`, `plan` and `import` ignore disabled provider keys
+  without a manifest.
 
 ### Changed
 

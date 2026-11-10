@@ -56,6 +56,13 @@ func (f *fakeProvider) Disable(_ context.Context, id string) error {
 	return nil
 }
 
+func (f *fakeProvider) Enable(_ context.Context, id string) error {
+	if k := f.find(id); k != nil {
+		k.Disabled = false
+	}
+	return nil
+}
+
 func (f *fakeProvider) Delete(_ context.Context, id string) error {
 	for i := range f.keys {
 		if f.keys[i].ID == id {

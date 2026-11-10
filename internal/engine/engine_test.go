@@ -521,3 +521,89 @@ func TestKindRemovedFromPolicy(t *testing.T) {
 		t.Fatalf("want unknown kind error, got %v", err)
 	}
 }
+
+func TestDisabledKey(t *testing.T) {
+	v := setup(t)
+	f := "teams/chat-core/" + prodKey + ".yaml"
+	v.edit(t, f, "ttl: 90d", "ttl: 90d\ndisabled: true")
+	v.apply(t)
+	if !v.or.keys[0].Disabled {
+		t.Fatal("new key with disabled: true is not disabled")
+	}
+	if !v.events.Has(EventKeyDisabled, "manifest") {
+		t.Fatal("no key_disabled event")
+	}
+	if got := types(v.plan(t)); got != "" {
+		t.Fatalf("plan after apply: %s", got)
+	}
+
+	// Rotation does not start for a disabled key, and --now fails.
+	v.clk.t = v.clk.t.Add(days(85))
+	if err := v.rotate(t, RotateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if len(v.or.keys) != 1 {
+		t.Fatal("disabled key rotated")
+	}
+	if err := v.rotate(t, RotateOptions{Now: []string{prodKey}, Only: []string{prodKey}}); err == nil {
+		t.Fatal("rotate --now on a disabled key must fail")
+	}
+
+	// Without track_disabled, removing the field does not enable the key.
+	v.edit(t, f, "disabled: true", "")
+	if got := types(v.plan(t)); got != "" {
+		t.Fatalf("plan without track_disabled: %s", got)
+	}
+
+	// With track_disabled, plan enables the key again.
+	v.edit(t, "policy.yaml", "secrets: vault", "secrets: vault\ntrack_disabled: true")
+	if got := types(v.plan(t)); got != "enable:"+prodKey {
+		t.Fatalf("plan with track_disabled: %s", got)
+	}
+	v.apply(t)
+	if v.or.keys[0].Disabled || !v.events.Has(EventKeyEnabled, "track_disabled") {
+		t.Fatal("key not enabled")
+	}
+
+	// A key disabled by hand at the provider is enabled again.
+	v.or.keys[0].Disabled = true
+	if got := types(v.plan(t)); got != "enable:"+prodKey {
+		t.Fatalf("plan after manual disable: %s", got)
+	}
+}
+
+func TestDisableDeepInfraKey(t *testing.T) {
+	v := setup(t)
+	v.edit(t, "policy.yaml", "secrets: vault", "secrets: vault\ntrack_disabled: true")
+	v.apply(t)
+	f := "teams/chat-core/" + stagingKey + ".yaml"
+	v.edit(t, f, "ttl: 30d", "ttl: 30d\ndisabled: true")
+	if got := types(v.plan(t)); got != "disable:"+stagingKey {
+		t.Fatalf("plan: %s", got)
+	}
+	v.apply(t)
+	if !v.di.keys[0].Disabled {
+		t.Fatal("deepinfra key not disabled")
+	}
+	v.edit(t, f, "disabled: true", "")
+	v.apply(t)
+	if k := v.di.keys[0]; k.Disabled || k.LimitUSD == nil || *k.LimitUSD != 100 {
+		t.Fatalf("deepinfra key not enabled with its limit: %+v", k)
+	}
+}
+
+func TestDisabledUnmanagedKeys(t *testing.T) {
+	v := setup(t)
+	v.apply(t)
+	v.or.keys = append(v.or.keys, provider.Key{ID: "zzz", Name: "rogue"}, provider.Key{ID: "off", Name: "old", Disabled: true})
+	if p := v.plan(t); len(p.Unmanaged) != 1 || p.Unmanaged[0].ID != "zzz" {
+		t.Fatalf("track_disabled false: unmanaged %v", p.Unmanaged)
+	}
+	if c, err := v.e.Import(context.Background()); err != nil || len(c) != 1 {
+		t.Fatalf("track_disabled false: import %+v %v", c, err)
+	}
+	v.edit(t, "policy.yaml", "secrets: vault", "secrets: vault\ntrack_disabled: true")
+	if p := v.plan(t); len(p.Unmanaged) != 2 {
+		t.Fatalf("track_disabled true: unmanaged %v", p.Unmanaged)
+	}
+}
