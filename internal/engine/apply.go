@@ -53,6 +53,34 @@ func (e *Engine) applyOne(ctx context.Context, a Action) error {
 		copyMeta(a.State, e.stateFor(a.Key))
 		return e.putState(ctx, a.State)
 
+	case ActDisable:
+		p, err := e.Providers.Get(a.Provider)
+		if err != nil {
+			return err
+		}
+		if err := p.Disable(ctx, a.State.KeyID); err != nil {
+			return err
+		}
+		e.emit(a.State, LevelInfo, EventKeyDisabled, "key %s disabled: %s", short(a.State.KeyID), a.Detail)
+		return nil
+
+	case ActEnable:
+		p, err := e.Providers.Get(a.Provider)
+		if err != nil {
+			return err
+		}
+		if err := p.Enable(ctx, a.State.KeyID); err != nil {
+			return err
+		}
+		if p.Caps().PerKeyLimit {
+			limit := a.Key.Budget.Limit
+			if err := p.SetLimit(ctx, a.State.KeyID, &limit, a.Key.Budget.ResetOrDefault()); err != nil {
+				return fmt.Errorf("set limit: %w", err)
+			}
+		}
+		e.emit(a.State, LevelInfo, EventKeyEnabled, "key %s enabled: %s", short(a.State.KeyID), a.Detail)
+		return nil
+
 	case ActDelete:
 		return e.remove(ctx, a.State, "manifest removed")
 	}
@@ -122,5 +150,18 @@ func (e *Engine) adopt(ctx context.Context, k *manifest.Key, cur *provider.Key) 
 	}
 	e.emit(st, LevelInfo, EventKeyImported, "key %s (%s) imported from %s; expires %s",
 		short(cur.ID), cur.Name, st.SecretPath, st.ExpiresAt.Format(time.DateOnly))
+	return e.disableIfWanted(ctx, p, k, st)
+}
+
+// disableIfWanted disables a new or adopted key when its manifest has disabled: true.
+// On failure the state is already saved, so the next plan shows the disable again.
+func (e *Engine) disableIfWanted(ctx context.Context, p provider.Provider, k *manifest.Key, st *state.State) error {
+	if !k.Disabled {
+		return nil
+	}
+	if err := p.Disable(ctx, st.KeyID); err != nil {
+		return fmt.Errorf("%s: disable key %s: %w", k.Name, short(st.KeyID), err)
+	}
+	e.emit(st, LevelInfo, EventKeyDisabled, "key %s disabled: disabled: true in the manifest", short(st.KeyID))
 	return nil
 }

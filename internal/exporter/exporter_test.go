@@ -32,6 +32,7 @@ func (p *prov) Create(context.Context, provider.Spec) (provider.Key, string, err
 }
 func (p *prov) SetLimit(context.Context, string, *float64, string) error { return nil }
 func (p *prov) Disable(context.Context, string) error                    { return nil }
+func (p *prov) Enable(context.Context, string) error                     { return nil }
 func (p *prov) Delete(context.Context, string) error                     { return nil }
 
 func TestMetrics(t *testing.T) {

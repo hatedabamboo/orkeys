@@ -136,6 +136,17 @@ func TestProviderFromSecrets(t *testing.T) {
 	if err != nil || p.SelfID() != "tok-1" {
 		t.Fatalf("env override: %v", err)
 	}
+
+	// A named provider of a kind: the env var uses the name, the client uses the kind.
+	t.Setenv("ORKEYS_OPENROUTER_PRIVATE_KEY", "env-key")
+	t.Setenv("ORKEYS_OPENROUTER_PRIVATE_SELF_ID", "priv")
+	p, err = providerFromSecrets(ctx, nil, "openrouter-private", manifest.ProviderConfig{Kind: "openrouter"}, time.Second)
+	if err != nil || p.SelfID() != "priv" || p.Name() != "openrouter" {
+		t.Fatalf("named provider: %v", err)
+	}
+	if _, err := providerFromSecrets(ctx, sec, "openrouter-x", manifest.ProviderConfig{ManagementKey: "missing"}, time.Second); err == nil || !strings.Contains(err.Error(), "ORKEYS_OPENROUTER_X_KEY") {
+		t.Fatalf("env var name with dash: %v", err)
+	}
 }
 
 func TestResolveExporterConfig(t *testing.T) {
@@ -150,6 +161,11 @@ func TestResolveExporterConfig(t *testing.T) {
 	c, err = resolveExporterConfig(pol, "vault://secret/x", "vault", []string{"openrouter=other/key", "deepinfra=di/key"}, true, false)
 	if err != nil || c.State != "vault://secret/x" || c.Secrets != "aws" || c.Providers["openrouter"].ManagementKey != "other/key" || len(c.Providers) != 2 {
 		t.Fatalf("flags override: %+v %v", c, err)
+	}
+	_ = os.WriteFile(pol, []byte("providers:\n  - {name: or-a, kind: openrouter, management_key: a/key}\n"), 0o644)
+	c, err = resolveExporterConfig(pol, "s", "vault", []string{"or-a=b/key"}, true, true)
+	if err != nil || c.Providers["or-a"].Kind != "openrouter" || c.Providers["or-a"].ManagementKey != "b/key" {
+		t.Fatalf("flag keeps the policy kind: %+v %v", c, err)
 	}
 	if _, err := resolveExporterConfig("", "s", "vault", nil, false, false); err == nil {
 		t.Fatal("no providers must fail")

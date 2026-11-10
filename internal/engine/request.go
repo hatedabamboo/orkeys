@@ -59,7 +59,7 @@ func (e *Engine) Request(ctx context.Context, r Request) (*Issued, error) {
 		return nil, fmt.Errorf("limit $%.2f: want more than 0 and at most $%.2f", limit, pol.MaxLimit)
 	}
 	reset := pol.Budget.Reset
-	if info, ok := provider.Lookup(r.Provider); ok && !info.Caps.LimitReset && reset != manifest.DefaultReset {
+	if info, ok := provider.Lookup(e.Inv.Policy.ProviderKind(r.Provider)); ok && !info.Caps.LimitReset && reset != manifest.DefaultReset {
 		return nil, fmt.Errorf("%s supports only monthly limits; kinds.%s.budget.reset is %s", r.Provider, r.Kind, reset)
 	}
 	ttl := pol.TTL.Duration

@@ -96,6 +96,12 @@ func (o *openRouter) Disable(ctx context.Context, id string) error {
 	return err
 }
 
+func (o *openRouter) Enable(ctx context.Context, id string) error {
+	f := false
+	_, err := o.c.Update(ctx, id, openrouter.UpdateRequest{Disabled: &f})
+	return err
+}
+
 func (o *openRouter) Delete(ctx context.Context, id string) error {
 	err := o.c.Delete(ctx, id)
 	if openrouter.IsNotFound(err) {

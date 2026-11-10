@@ -96,7 +96,7 @@ func (a *app) exporterCmd() *cobra.Command {
 			}
 			sort.Strings(names)
 			for _, name := range names {
-				if sec == nil && os.Getenv("ORKEYS_"+strings.ToUpper(name)+"_KEY") == "" {
+				if sec == nil && os.Getenv(providerEnv(name, "KEY")) == "" {
 					if sec, err = f.Secrets(ctx, cfg.Secrets); err != nil {
 						return err
 					}
@@ -129,6 +129,6 @@ func (a *app) exporterCmd() *cobra.Command {
 	f.StringVar(&policyPath, "policy", "", "read state, secrets and providers from this policy.yaml; flags override it")
 	f.StringVar(&stateURL, "state", "vault://secret/orkeys/state", "state store: vault://<mount>/<path> or s3://<bucket>/<prefix>")
 	f.StringVar(&secretsKind, "secrets", "vault", "where management keys are: vault or aws (Secrets Manager)")
-	f.StringArrayVar(&providerPaths, "provider", nil, "provider and secret path of its management key, name=path (repeat)")
+	f.StringArrayVar(&providerPaths, "provider", nil, "provider and secret path of its management key, name=path (repeat); with --policy, the name can be any provider name of the policy")
 	return cmd
 }

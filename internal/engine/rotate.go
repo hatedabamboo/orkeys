@@ -78,7 +78,10 @@ func (e *Engine) rotateOne(ctx context.Context, st *state.State, keys []provider
 			}
 			changed = true
 		}
-		due := !now.Before(st.ExpiresAt.Add(-kp.RotateBefore.Duration))
+		due := !now.Before(st.ExpiresAt.Add(-kp.RotateBefore.Duration)) && !k.Disabled
+		if force && k.Disabled {
+			return errors.New("key is disabled in the manifest; it does not rotate")
+		}
 		if force && !due && len(st.PendingRevokes) > 0 {
 			return fmt.Errorf("rotation already in progress: old key %s waits for revoke", short(st.PendingRevokes[0].KeyID))
 		}

@@ -68,6 +68,9 @@ func (e *Engine) Hygiene(ctx context.Context, dryRun bool) ([]Finding, error) {
 		if e.Inv.Policy.Requested(st.Kind, st.Owner) {
 			continue
 		}
+		if k := e.Inv.Key(st.Name); k != nil && k.Disabled {
+			continue
+		}
 		p, perr := e.Providers.Get(st.Provider)
 		if perr != nil || !p.Caps().LastUsed {
 			continue

@@ -68,7 +68,8 @@ Environment for inventory commands:
   VAULT_CLIENT_CERT, VAULT_CLIENT_KEY, VAULT_CACERT
                                   Vault TLS: client certificate and key (mTLS), CA bundle
   AWS_REGION, AWS_PROFILE, ...    AWS access for s3:// state and aws secrets
-  ORKEYS_<PROVIDER>_KEY           management key; overrides providers.<name>.management_key
+  ORKEYS_<PROVIDER>_KEY           management key; overrides providers[].management_key.
+                                  <PROVIDER> is the provider name in upper case, "-" as "_"
   ` + EnvGitHubToken + `                    team members from GitHub teams; org membership checks in hygiene`,
 		Version:       a.version,
 		Args:          cobra.NoArgs,

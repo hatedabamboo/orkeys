@@ -187,7 +187,7 @@ func (e *Engine) issue(ctx context.Context, k *manifest.Key, orig *state.State, 
 	}
 	e.emit(st, LevelInfo, EventKeyIssued, "new key %s written to %s; expires %s",
 		short(pk.ID), st.SecretPath, exp.Format(time.DateOnly))
-	return st, nil
+	return st, e.disableIfWanted(ctx, p, k, st)
 }
 
 func (e *Engine) revoke(ctx context.Context, providerName, id string) error {

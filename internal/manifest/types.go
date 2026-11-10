@@ -55,15 +55,18 @@ func (d *Duration) UnmarshalYAML(n *yaml.Node) error {
 func (d Duration) MarshalYAML() (any, error) { return values.Days(d.Duration), nil }
 
 type Policy struct {
-	Naming     string                    `yaml:"naming"`
-	Kinds      map[string]*KindPolicy    `yaml:"kinds"`
-	Providers  map[string]ProviderConfig `yaml:"providers"`
-	State      string                    `yaml:"state"`
-	Secrets    string                    `yaml:"secrets"`
-	Envs       []string                  `yaml:"envs"`
-	NamePrefix *string                   `yaml:"name_prefix"`
-	GitHub     GitHubConfig              `yaml:"github"`
-	Clusters   map[string]ClusterConfig  `yaml:"clusters"`
+	Naming     string                   `yaml:"naming"`
+	Kinds      map[string]*KindPolicy   `yaml:"kinds"`
+	Providers  Providers                `yaml:"providers"`
+	State      string                   `yaml:"state"`
+	Secrets    string                   `yaml:"secrets"`
+	Envs       []string                 `yaml:"envs"`
+	NamePrefix *string                  `yaml:"name_prefix"`
+	GitHub     GitHubConfig             `yaml:"github"`
+	Clusters   map[string]ClusterConfig `yaml:"clusters"`
+	// TrackDisabled makes plan enforce the disabled status of manifest keys both ways:
+	// it also enables keys that are disabled at the provider but not in the manifest.
+	TrackDisabled bool `yaml:"track_disabled"`
 }
 
 type GitHubConfig struct {
@@ -100,7 +103,86 @@ func (t *Team) ChannelFor(kp *KindPolicy) string {
 	return t.Channels.Alerts
 }
 
+// Providers maps a provider name to its config. In policy.yaml it is a list with a name and a kind per entry,
+// or a map from name to config, where the kind defaults to the name.
+type Providers map[string]ProviderConfig
+
+var providerFields = []string{"name", "kind", "management_key", "workspace", "base_url"}
+
+func (ps *Providers) UnmarshalYAML(n *yaml.Node) error {
+	out := Providers{}
+	add := func(name string, line int, pc ProviderConfig) error {
+		if name == "" {
+			return fmt.Errorf("line %d: providers: name is required", line)
+		}
+		if _, dup := out[name]; dup {
+			return fmt.Errorf("line %d: providers: duplicate name %q", line, name)
+		}
+		pc.Name = name
+		if pc.Kind == "" {
+			pc.Kind = name
+		}
+		out[name] = pc
+		return nil
+	}
+	decode := func(v *yaml.Node) (ProviderConfig, error) {
+		var pc ProviderConfig
+		if v.Kind != yaml.MappingNode {
+			return pc, fmt.Errorf("line %d: providers: want a mapping", v.Line)
+		}
+		// Node.Decode does not inherit KnownFields, so check the field names here.
+		for i := 0; i < len(v.Content); i += 2 {
+			if k := v.Content[i]; !slices.Contains(providerFields, k.Value) {
+				return pc, fmt.Errorf("line %d: providers: field %s not found (known: %s)", k.Line, k.Value, strings.Join(providerFields, ", "))
+			}
+		}
+		return pc, v.Decode(&pc)
+	}
+	switch n.Kind {
+	case yaml.SequenceNode:
+		for _, item := range n.Content {
+			pc, err := decode(item)
+			if err != nil {
+				return err
+			}
+			if err := add(pc.Name, item.Line, pc); err != nil {
+				return err
+			}
+		}
+	case yaml.MappingNode:
+		for i := 0; i < len(n.Content); i += 2 {
+			k, v := n.Content[i], n.Content[i+1]
+			pc, err := decode(v)
+			if err != nil {
+				return err
+			}
+			if pc.Name != "" && pc.Name != k.Value {
+				return fmt.Errorf("line %d: providers.%s: name %q differs from the key", v.Line, k.Value, pc.Name)
+			}
+			if err := add(k.Value, k.Line, pc); err != nil {
+				return err
+			}
+		}
+	default:
+		return fmt.Errorf("line %d: providers: want a list or a mapping", n.Line)
+	}
+	*ps = out
+	return nil
+}
+
+// ProviderKind returns the provider type (openrouter, deepinfra) of a configured provider name.
+// An unknown name is returned as is, so a key with provider: openrouter still finds its type.
+func (p *Policy) ProviderKind(name string) string {
+	if pc, ok := p.Providers[name]; ok && pc.Kind != "" {
+		return pc.Kind
+	}
+	return name
+}
+
 type ProviderConfig struct {
+	// Name is the provider name used in manifests, state and metrics. Kind is its type.
+	Name          string `yaml:"name"`
+	Kind          string `yaml:"kind"`
 	ManagementKey string `yaml:"management_key"`
 	Workspace     string `yaml:"workspace"`
 	BaseURL       string `yaml:"base_url"`
@@ -154,6 +236,7 @@ type Key struct {
 	Description string     `yaml:"description"`
 	Scopes      []string   `yaml:"scopes,omitempty"`
 	Import      *Import    `yaml:"import,omitempty"`
+	Disabled    bool       `yaml:"disabled,omitempty"`
 	Budget      Budget     `yaml:"budget"`
 	TTL         Duration   `yaml:"ttl"`
 	Secret      *Secret    `yaml:"secret,omitempty"`

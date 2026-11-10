@@ -17,6 +17,8 @@ const (
 	EventKeyIssued      = "key_issued"
 	EventKeyImported    = "key_imported"
 	EventKeyRevoked     = "key_revoked"
+	EventKeyDisabled    = "key_disabled"
+	EventKeyEnabled     = "key_enabled"
 	EventRotationStart  = "rotation_started"
 	EventRotationSynced = "rotation_synced"
 	EventRotationFailed = "rotation_failed"

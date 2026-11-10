@@ -91,6 +91,9 @@ func (d *deepInfra) Disable(ctx context.Context, id string) error {
 	return d.c.SetKeyLimit(ctx, id, &zero)
 }
 
+// Enable does nothing: a DeepInfra key is disabled by a limit of 0, so the caller sets the limit again.
+func (d *deepInfra) Enable(context.Context, string) error { return nil }
+
 func (d *deepInfra) Delete(ctx context.Context, id string) error {
 	err := d.c.DeleteToken(ctx, id)
 	if httpx.StatusOf(err) == http.StatusNotFound {

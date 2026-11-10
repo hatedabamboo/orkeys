@@ -175,8 +175,11 @@ Unknown fields are errors, so a typo does not pass silently.
 |---|---|---|
 | `state` | `vault://secret/orkeys/state` | State store: `vault://<mount>/<path>` or `s3://<bucket>/<prefix>` |
 | `secrets` | `vault` | Secrets store: `vault` or `aws` (Secrets Manager) |
-| `providers.<name>.management_key` | | Secret path with field `key` (and optional `self_id`, `workspace`, `base_url`). Optional if `ORKEYS_<NAME>_KEY` is set |
-| `providers.<name>.workspace`, `base_url` | | OpenRouter workspace; API base URL |
+| `providers[]` | | Provider accounts. A list of `{name, kind, ...}`, or a map from name to config. See [Providers](#providers) |
+| `providers[].name` | | Name used in manifests (`provider:`), kinds, state and metrics. Matches `^[a-z][a-z0-9-]*$` |
+| `providers[].kind` | the name | Provider type: `openrouter` or `deepinfra` |
+| `providers[].management_key` | | Secret path with field `key` (and optional `self_id`, `workspace`, `base_url`). Optional if `ORKEYS_<NAME>_KEY` is set |
+| `providers[].workspace`, `base_url` | | OpenRouter workspace; API base URL |
 | `envs` | `[prod, staging, dev]` | Allowed `env` values of manifests |
 | `name_prefix` | `{env}-{team}-` | Required start of key names. `{env}` and `{team}` are replaced. `""` turns the check off |
 | `naming` | `^[a-z0-9][a-z0-9._-]*$` | Regex that every key name must match |
@@ -184,6 +187,44 @@ Unknown fields are errors, so a typo does not pass silently.
 | `clusters.<name>.context` | cluster name | kubectl context for a cluster used in `consumers` |
 | `github.org` | | Org for owner checks in `hygiene` and for team members from GitHub teams |
 | `github.api_url`, `github.keys_url` | `https://api.github.com`, `https://github.com` | For GitHub Enterprise |
+| `track_disabled` | `false` | `true`: `plan` also enables manifest keys that are disabled at the provider but not in the manifest. See [Disabling a key](#disabling-a-key) |
+
+#### Providers
+
+Each entry is one provider account. `kind` sets the provider type, and `name` is how manifests refer to it. Two
+entries can have the same kind, for example two OpenRouter accounts or two workspaces of one account:
+
+```yaml
+providers:
+  - name: openrouter-private
+    kind: openrouter
+    management_key: secret/orkeys/providers/openrouter-private
+  - name: openrouter-public
+    kind: openrouter
+    management_key: secret/orkeys/providers/openrouter-public
+  - name: deepinfra                 # kind defaults to the name
+    management_key: secret/orkeys/providers/deepinfra
+```
+
+The map form still works. The map key is the name, and the kind defaults to it:
+
+```yaml
+providers:
+  openrouter:
+    management_key: secret/orkeys/providers/openrouter
+  openrouter-public:
+    kind: openrouter
+    management_key: secret/orkeys/providers/openrouter-public
+```
+
+The env var override uses the name in upper case, with `-` as `_`: `openrouter-private` reads
+`ORKEYS_OPENROUTER_PRIVATE_KEY` and `ORKEYS_OPENROUTER_PRIVATE_SELF_ID`.
+
+Do not point two entries at the same keys: two management keys of one OpenRouter account without different
+`workspace` values. Then each entry lists the keys of the other as unmanaged.
+
+The state stores the provider name of each key. Do not rename a provider that has keys: `plan` then shows
+"provider or kind changed". To move keys to a new name, add manifests with new key names.
 
 #### Kinds
 
@@ -272,7 +313,7 @@ service (Alertmanager, a CI step, a bot) can route them.
 |---|---|---|
 | `name` | yes | Same as the file name. Must match `naming` and start with `name_prefix` |
 | `kind` | yes | A kind with `source: manifest` |
-| `provider` | yes | A key of `providers`, allowed by the kind |
+| `provider` | yes | A provider name from `providers`, allowed by the kind |
 | `env` | yes | One of `envs` |
 | `service` | no | Free text; exported as a metric label |
 | `description` | yes | |
@@ -283,6 +324,7 @@ service (Alertmanager, a CI step, a bot) can route them.
 | `secret.path`, `secret.field` | path: yes | Where the key goes. Vault: `<mount>/<path>`; AWS: secret name. Field default `api_key`. Other fields in the same secret are kept |
 | `consumers[]` | no | `type` (`eso` or `direct`), `cluster`, `namespace`, `externalsecret` (eso), `restart` (`deployment/x`, `statefulset/x`, `daemonset/x`, `cronjob/x`). orkeys restarts only what `restart` lists |
 | `import.id`, `import.name` | no | Adopt an existing provider key instead of creating one. `name` is its current name at the provider. See below |
+| `disabled` | no | `true` disables the key at the provider and stops its rotation. Default `false`. See below |
 
 ```yaml
 consumers:
@@ -302,6 +344,29 @@ If a consumer still uses the old key after `revoke_grace`, its spend grows and o
 
 Change `secret.path` or `secret.field` to move a key: orkeys rotates it to the new place and removes the old field after
 the revoke. Delete the manifest to revoke the key; orkeys removes only its own field from the secret.
+
+#### Disabling a key
+
+Set `disabled: true` in the manifest to stop a key and keep its state and secret. `plan` shows `disable`, and `apply`
+disables the key at the provider (`key_disabled` event). OpenRouter has a disabled flag. DeepInfra has none, so orkeys
+sets the limit to 0. A new or imported key with `disabled: true` is disabled right after `apply` creates or adopts it.
+
+A disabled key does not rotate, and `rotate --now` fails for it. `plan` does not change its limit, and `hygiene` does
+not report it as unused. An OpenRouter key still has its native expiry; after it expires, `plan` recreates it as a
+disabled key.
+
+Remove `disabled: true` (or set `false`) to enable the key again. This works only with `track_disabled: true` in
+`policy.yaml`:
+
+| `track_disabled` | Manifest `disabled: true`, key active | Manifest not disabled, key disabled at the provider |
+|---|---|---|
+| `false` (default) | `disable` | nothing; the key stays disabled |
+| `true` | `disable` | `enable`, then the limit is set from `budget` (`key_enabled` event) |
+
+With `track_disabled: true`, a key disabled by hand (`orkeys or disable`) is enabled again on the next `apply`.
+
+`track_disabled` also controls provider keys without a manifest. With `false`, `plan` and `orkeys import` ignore such
+keys when they are disabled. With `true`, `plan` reports them as unmanaged and `orkeys import` prints manifests for them.
 
 #### Importing an existing key
 
@@ -371,6 +436,8 @@ The result key depends on the command: `plan` (apply), `issued` (request), `find
 | `key_issued` | info | A key was created |
 | `key_imported` | info | An existing provider key was adopted |
 | `key_revoked` | info | A key was revoked (manifest removed, expired, owner left) |
+| `key_disabled` | info | A key was disabled (`disabled: true` in the manifest) |
+| `key_enabled` | info | A disabled key was enabled again (`track_disabled: true`) |
 | `rotation_started` | info | A new key was written; consumers sync next |
 | `rotation_synced` | info | Consumers use the new key; the old key will be revoked after `revoke_grace` |
 | `old_key_revoked` | info | The old key of a rotation was revoked |
