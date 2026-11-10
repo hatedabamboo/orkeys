@@ -175,8 +175,11 @@ Unknown fields are errors, so a typo does not pass silently.
 |---|---|---|
 | `state` | `vault://secret/orkeys/state` | State store: `vault://<mount>/<path>` or `s3://<bucket>/<prefix>` |
 | `secrets` | `vault` | Secrets store: `vault` or `aws` (Secrets Manager) |
-| `providers.<name>.management_key` | | Secret path with field `key` (and optional `self_id`, `workspace`, `base_url`). Optional if `ORKEYS_<NAME>_KEY` is set |
-| `providers.<name>.workspace`, `base_url` | | OpenRouter workspace; API base URL |
+| `providers[]` | | Provider accounts. A list of `{name, kind, ...}`, or a map from name to config. See [Providers](#providers) |
+| `providers[].name` | | Name used in manifests (`provider:`), kinds, state and metrics. Matches `^[a-z][a-z0-9-]*$` |
+| `providers[].kind` | the name | Provider type: `openrouter` or `deepinfra` |
+| `providers[].management_key` | | Secret path with field `key` (and optional `self_id`, `workspace`, `base_url`). Optional if `ORKEYS_<NAME>_KEY` is set |
+| `providers[].workspace`, `base_url` | | OpenRouter workspace; API base URL |
 | `envs` | `[prod, staging, dev]` | Allowed `env` values of manifests |
 | `name_prefix` | `{env}-{team}-` | Required start of key names. `{env}` and `{team}` are replaced. `""` turns the check off |
 | `naming` | `^[a-z0-9][a-z0-9._-]*$` | Regex that every key name must match |
@@ -185,6 +188,43 @@ Unknown fields are errors, so a typo does not pass silently.
 | `github.org` | | Org for owner checks in `hygiene` and for team members from GitHub teams |
 | `github.api_url`, `github.keys_url` | `https://api.github.com`, `https://github.com` | For GitHub Enterprise |
 | `track_disabled` | `false` | `true`: `plan` also enables manifest keys that are disabled at the provider but not in the manifest. See [Disabling a key](#disabling-a-key) |
+
+#### Providers
+
+Each entry is one provider account. `kind` sets the provider type, and `name` is how manifests refer to it. Two
+entries can have the same kind, for example two OpenRouter accounts or two workspaces of one account:
+
+```yaml
+providers:
+  - name: openrouter-private
+    kind: openrouter
+    management_key: secret/orkeys/providers/openrouter-private
+  - name: openrouter-public
+    kind: openrouter
+    management_key: secret/orkeys/providers/openrouter-public
+  - name: deepinfra                 # kind defaults to the name
+    management_key: secret/orkeys/providers/deepinfra
+```
+
+The map form still works. The map key is the name, and the kind defaults to it:
+
+```yaml
+providers:
+  openrouter:
+    management_key: secret/orkeys/providers/openrouter
+  openrouter-public:
+    kind: openrouter
+    management_key: secret/orkeys/providers/openrouter-public
+```
+
+The env var override uses the name in upper case, with `-` as `_`: `openrouter-private` reads
+`ORKEYS_OPENROUTER_PRIVATE_KEY` and `ORKEYS_OPENROUTER_PRIVATE_SELF_ID`.
+
+Do not point two entries at the same keys: two management keys of one OpenRouter account without different
+`workspace` values. Then each entry lists the keys of the other as unmanaged.
+
+The state stores the provider name of each key. Do not rename a provider that has keys: `plan` then shows
+"provider or kind changed". To move keys to a new name, add manifests with new key names.
 
 #### Kinds
 
@@ -273,7 +313,7 @@ service (Alertmanager, a CI step, a bot) can route them.
 |---|---|---|
 | `name` | yes | Same as the file name. Must match `naming` and start with `name_prefix` |
 | `kind` | yes | A kind with `source: manifest` |
-| `provider` | yes | A key of `providers`, allowed by the kind |
+| `provider` | yes | A provider name from `providers`, allowed by the kind |
 | `env` | yes | One of `envs` |
 | `service` | no | Free text; exported as a metric label |
 | `description` | yes | |

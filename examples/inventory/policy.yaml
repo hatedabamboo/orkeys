@@ -32,10 +32,12 @@ kinds:
     notify_before: 1d
     providers: [openrouter]
 
-providers:
-  openrouter:
+providers:                                    # provider accounts; manifests use the name
+  - name: openrouter
+    kind: openrouter                          # type; default: the name
     management_key: secret/orkeys/providers/openrouter   # secret with field "key"
-  deepinfra:
+  - name: deepinfra
+    kind: deepinfra
     management_key: secret/orkeys/providers/deepinfra    # read only, see README
 
 clusters:

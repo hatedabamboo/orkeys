@@ -79,13 +79,22 @@ func (a *app) finish(result map[string]any, err error) error {
 	return err
 }
 
+// providerEnv returns the env var for a provider name: openrouter-private, KEY -> ORKEYS_OPENROUTER_PRIVATE_KEY.
+func providerEnv(name, suffix string) string {
+	return "ORKEYS_" + strings.ToUpper(strings.ReplaceAll(name, "-", "_")) + "_" + suffix
+}
+
 func providerFromSecrets(ctx context.Context, sec secrets.Store, name string, cfg manifest.ProviderConfig, timeout time.Duration) (provider.Provider, error) {
 	pc := provider.Config{BaseURL: cfg.BaseURL, Workspace: cfg.Workspace, Timeout: timeout}
-	envKey := "ORKEYS_" + strings.ToUpper(name) + "_KEY"
+	kind := cfg.Kind
+	if kind == "" {
+		kind = name
+	}
+	envKey := providerEnv(name, "KEY")
 	if v := strings.TrimSpace(os.Getenv(envKey)); v != "" {
 		pc.Key = v
-		pc.SelfID = os.Getenv("ORKEYS_" + strings.ToUpper(name) + "_SELF_ID")
-		return provider.New(name, pc)
+		pc.SelfID = os.Getenv(providerEnv(name, "SELF_ID"))
+		return provider.New(kind, pc)
 	}
 	if cfg.ManagementKey == "" {
 		return nil, fmt.Errorf("%s: set %s or providers.%s.management_key", name, envKey, name)
@@ -104,7 +113,7 @@ func providerFromSecrets(ctx context.Context, sec secrets.Store, name string, cf
 	if pc.Key == "" {
 		return nil, fmt.Errorf("%s: field \"key\" is empty in %s (or set %s)", name, cfg.ManagementKey, envKey)
 	}
-	return provider.New(name, pc)
+	return provider.New(kind, pc)
 }
 
 func (a *app) engine(ctx context.Context, outDir string) (*engine.Engine, error) {

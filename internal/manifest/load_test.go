@@ -481,3 +481,97 @@ func TestAlertChannelDeprecated(t *testing.T) {
 		t.Fatalf("unknown kind: channel %q", ch)
 	}
 }
+
+const providersMap = `providers:
+  openrouter:
+    management_key: kv/orkeys/providers/openrouter
+  deepinfra:
+    management_key: kv/orkeys/providers/deepinfra
+`
+
+func withProviders(t *testing.T, providers string) string {
+	t.Helper()
+	root := copyRepo(t)
+	p := filepath.Join(root, "policy.yaml")
+	b, _ := os.ReadFile(p)
+	if !strings.Contains(string(b), providersMap) {
+		t.Fatal("testdata policy.yaml: providers block not found")
+	}
+	if err := os.WriteFile(p, []byte(strings.Replace(string(b), providersMap, providers, 1)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return root
+}
+
+func TestProvidersList(t *testing.T) {
+	root := withProviders(t, `providers:
+  - name: openrouter
+    management_key: kv/orkeys/providers/openrouter
+  - name: openrouter-private
+    kind: openrouter
+    management_key: kv/orkeys/providers/openrouter-private
+    workspace: ws-private
+  - name: deepinfra
+    management_key: kv/orkeys/providers/deepinfra
+`)
+	key := `name: prod-chat-core-private
+kind: production
+provider: openrouter-private
+env: prod
+description: Private workspace.
+budget: {reset: daily, limit: 10}
+ttl: 30d
+secret: {path: kv/llm/private}
+`
+	_ = os.WriteFile(filepath.Join(root, "teams/chat-core/prod-chat-core-private.yaml"), []byte(key), 0o644)
+	inv, err := Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ps := inv.Validate(); len(ps) > 0 {
+		t.Fatalf("problems: %v", ps)
+	}
+	pc := inv.Policy.Providers["openrouter-private"]
+	if pc.Kind != "openrouter" || pc.Workspace != "ws-private" || inv.Policy.ProviderKind("deepinfra") != "deepinfra" {
+		t.Fatalf("providers: %+v", inv.Policy.Providers)
+	}
+
+	// The caps come from the kind: deepinfra-kind providers allow only monthly limits.
+	root = withProviders(t, "providers:\n  - {name: di-batch, kind: deepinfra}\n  - {name: openrouter}\n  - {name: deepinfra}\n")
+	_ = os.WriteFile(filepath.Join(root, "teams/chat-core/prod-chat-core-private.yaml"),
+		[]byte(strings.Replace(key, "openrouter-private", "di-batch", 1)), 0o644)
+	if inv, err = Load(root); err != nil {
+		t.Fatal(err)
+	}
+	if ps := fmt.Sprint(inv.Validate()); !strings.Contains(ps, "di-batch supports only monthly limits") {
+		t.Fatalf("want monthly-only problem, got %s", ps)
+	}
+}
+
+func TestProvidersProblems(t *testing.T) {
+	cases := map[string]struct{ providers, loadErr, problem string }{
+		"no name":       {"providers:\n  - {kind: openrouter}\n", "name is required", ""},
+		"duplicate":     {"providers:\n  - {name: openrouter}\n  - {name: openrouter}\n", `duplicate name "openrouter"`, ""},
+		"unknown field": {"providers:\n  - {name: openrouter, managment_key: x}\n", "field managment_key not found", ""},
+		"map name":      {"providers:\n  openrouter: {name: other}\n", "differs from the key", ""},
+		"unknown kind":  {"providers:\n  - {name: openrouter}\n  - {name: deepinfra}\n  - {name: llm, kind: openai}\n", "", `providers.llm: unknown kind "openai"`},
+		"bad name":      {"providers:\n  - {name: openrouter}\n  - {name: deepinfra}\n  - {name: Or_2, kind: openrouter}\n", "", "providers.Or_2: name must match"},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			inv, err := Load(withProviders(t, c.providers))
+			if c.loadErr != "" {
+				if err == nil || !strings.Contains(err.Error(), c.loadErr) {
+					t.Fatalf("want load error %q, got %v", c.loadErr, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if ps := fmt.Sprint(inv.Validate()); !strings.Contains(ps, c.problem) {
+				t.Fatalf("want %q in %s", c.problem, ps)
+			}
+		})
+	}
+}

@@ -607,3 +607,29 @@ func TestDisabledUnmanagedKeys(t *testing.T) {
 		t.Fatalf("track_disabled true: unmanaged %v", p.Unmanaged)
 	}
 }
+
+func TestTwoProvidersOfOneKind(t *testing.T) {
+	v := setup(t)
+	priv := &fakeProvider{name: "openrouter-private", caps: v.or.caps}
+	v.e.Providers["openrouter-private"] = priv
+	v.edit(t, "policy.yaml", "providers:\n", "providers:\n  openrouter-private:\n    kind: openrouter\n")
+	f := "teams/chat-core/" + prodKey + ".yaml"
+	v.edit(t, f, "provider: openrouter", "provider: openrouter-private")
+	v.apply(t)
+	if len(priv.keys) != 1 || len(v.or.keys) != 0 {
+		t.Fatalf("key went to the wrong provider: private %d, openrouter %d", len(priv.keys), len(v.or.keys))
+	}
+	if st := v.store.states[prodKey]; st.Provider != "openrouter-private" {
+		t.Fatalf("state provider: %q", st.Provider)
+	}
+	if got := types(v.plan(t)); got != "" {
+		t.Fatalf("plan after apply: %s", got)
+	}
+
+	// A key in the other account is unmanaged there, with that provider name.
+	v.or.keys = append(v.or.keys, provider.Key{ID: "zzz", Name: "rogue"})
+	p := v.plan(t)
+	if len(p.Unmanaged) != 1 || p.Unmanaged[0].Provider != "openrouter" {
+		t.Fatalf("unmanaged: %v", p.Unmanaged)
+	}
+}

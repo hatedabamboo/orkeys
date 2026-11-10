@@ -54,9 +54,12 @@ func (inv *Inventory) Validate() []Problem {
 	if len(pol.Providers) == 0 {
 		add("policy.yaml", "providers: at least one provider is required")
 	}
-	for name := range pol.Providers {
-		if _, ok := provider.Lookup(name); !ok {
-			add("policy.yaml", "providers.%s: unknown provider (known: %s)", name, strings.Join(provider.Names(), ", "))
+	for _, name := range slices.Sorted(maps.Keys(pol.Providers)) {
+		if !providerName.MatchString(name) {
+			add("policy.yaml", "providers.%s: name must match %s", name, providerName)
+		}
+		if kind := pol.Providers[name].Kind; !knownProvider(kind) {
+			add("policy.yaml", "providers.%s: unknown kind %q (known: %s)", name, kind, strings.Join(provider.Names(), ", "))
 		}
 	}
 	if len(pol.Kinds) == 0 {
@@ -148,7 +151,7 @@ func (inv *Inventory) Validate() []Problem {
 		if k.Budget.Reset != "" && !slices.Contains(resets, k.Budget.Reset) {
 			add(p, "budget.reset: want daily, weekly or monthly")
 		}
-		if info, ok := provider.Lookup(k.Provider); ok && !info.Caps.LimitReset && k.Budget.Reset != "" && k.Budget.Reset != DefaultReset {
+		if info, ok := provider.Lookup(pol.ProviderKind(k.Provider)); ok && !info.Caps.LimitReset && k.Budget.Reset != "" && k.Budget.Reset != DefaultReset {
 			add(p, "budget.reset: %s supports only monthly limits", k.Provider)
 		}
 		if kp != nil && !kp.AllowsProvider(k.Provider) {
@@ -157,7 +160,7 @@ func (inv *Inventory) Validate() []Problem {
 		if k.TTL.Duration == 0 {
 			add(p, "ttl: required")
 		}
-		if info, ok := provider.Lookup(k.Provider); ok && len(k.Scopes) > 0 && !info.Caps.Scopes {
+		if info, ok := provider.Lookup(pol.ProviderKind(k.Provider)); ok && len(k.Scopes) > 0 && !info.Caps.Scopes {
 			add(p, "scopes: %s keys have no scopes", k.Provider)
 		}
 		if slices.Contains(k.Scopes, "unrestricted") {
@@ -184,6 +187,14 @@ func (inv *Inventory) Validate() []Problem {
 var teamSlug = regexp.MustCompile(`^[a-z0-9][a-z0-9_.-]*$`)
 
 var kindName = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
+
+// providerName is also used in env var names, with "-" as "_".
+var providerName = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
+
+func knownProvider(kind string) bool {
+	_, ok := provider.Lookup(kind)
+	return ok
+}
 
 func validateKind(pol *Policy, name string, add func(string, string, ...any)) {
 	at := "kinds." + name
