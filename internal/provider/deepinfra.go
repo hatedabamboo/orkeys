@@ -23,7 +23,7 @@ func newDeepInfra(c Config) *deepInfra {
 func (d *deepInfra) Name() string   { return "deepinfra" }
 func (d *deepInfra) SelfID() string { return d.selfID }
 
-var deepInfraCaps = Caps{PerKeyLimit: true, Scopes: true}
+var deepInfraCaps = Caps{PerKeyLimit: true, Scopes: true, Disable: true}
 
 func (d *deepInfra) Caps() Caps { return deepInfraCaps }
 

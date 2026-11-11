@@ -19,10 +19,11 @@ func (s states) ListStates(context.Context) ([]*state.State, error) { return s, 
 type prov struct {
 	keys []provider.Key
 	err  error
+	caps provider.Caps
 }
 
 func (p *prov) Name() string        { return "openrouter" }
-func (p *prov) Caps() provider.Caps { return provider.Caps{} }
+func (p *prov) Caps() provider.Caps { return p.caps }
 func (p *prov) SelfID() string      { return "self" }
 func (p *prov) List(context.Context) ([]provider.Key, error) {
 	return p.keys, p.err
@@ -41,7 +42,7 @@ func TestMetrics(t *testing.T) {
 	p := &prov{keys: []provider.Key{
 		{ID: "k1", SpendWeekUSD: &spend, SpendMonthUSD: &month, LastUsedAt: &used},
 		{ID: "old"}, {ID: "rogue"}, {ID: "self"},
-	}}
+	}, caps: provider.Caps{PerKeyLimit: true}}
 	x := &Exporter{
 		Store: states{{
 			Name: "prod-a-b", Team: "a", Kind: "production", Env: "prod", Provider: "openrouter", KeyID: "k1",
@@ -60,6 +61,7 @@ func TestMetrics(t *testing.T) {
 	for _, want := range []string{
 		"orkeys_key_spend_usd" + labels + " 42.5",
 		"orkeys_key_hard_limit_usd" + labels + " 200",
+		"orkeys_key_budget_usd" + labels + " 200",
 		"orkeys_key_expires_timestamp_seconds" + labels + " 1.8e+09",
 		"orkeys_key_last_used_timestamp_seconds" + labels + " 1.7e+09",
 		"orkeys_key_rotation_state" + labels + " 2",
@@ -82,5 +84,24 @@ func TestMetrics(t *testing.T) {
 	out = rec.Body.String()
 	if !strings.Contains(out, `orkeys_provider_poll_success{provider="openrouter"} 0`) || strings.Contains(out, "orkeys_key_spend_usd{") {
 		t.Errorf("on failure want poll_success 0 and no key series:\n%s", out)
+	}
+}
+
+func TestMetricsWithoutProviderLimit(t *testing.T) {
+	month := 12.0
+	x := &Exporter{
+		Store:     states{{Name: "prod-a-c", Provider: "openai", KeyID: "k1", LimitUSD: 50, ExpiresAt: time.Unix(1800000000, 0)}},
+		Providers: provider.Set{"openai": &prov{keys: []provider.Key{{ID: "k1", SpendMonthUSD: &month}}}},
+		Log:       &strings.Builder{},
+	}
+	x.Poll(context.Background())
+	rec := httptest.NewRecorder()
+	x.ServeHTTP(rec, httptest.NewRequest("GET", "/metrics", nil))
+	out := rec.Body.String()
+	if !strings.Contains(out, `orkeys_key_budget_usd{name="prod-a-c"`) || !strings.Contains(out, `orkeys_key_spend_usd{name="prod-a-c"`) {
+		t.Errorf("want budget and spend:\n%s", out)
+	}
+	if strings.Contains(out, "orkeys_key_hard_limit_usd") {
+		t.Errorf("no hard limit for a provider without per-key limits:\n%s", out)
 	}
 }

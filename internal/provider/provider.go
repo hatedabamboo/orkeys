@@ -13,6 +13,10 @@ type Caps struct {
 	LimitReset   bool
 	LastUsed     bool
 	Scopes       bool
+	// Disable is true when the provider can disable a key and enable it again.
+	Disable bool
+	// MaxExpiry is the longest native expiry. Zero means no limit.
+	MaxExpiry time.Duration
 }
 
 type Key struct {
@@ -70,6 +74,7 @@ type Info struct {
 var registry = []Info{
 	{Name: "openrouter", Short: "or", Caps: openRouterCaps, new: func(c Config) Provider { return newOpenRouter(c) }},
 	{Name: "deepinfra", Short: "di", Caps: deepInfraCaps, new: func(c Config) Provider { return newDeepInfra(c) }},
+	{Name: "openai", Short: "oa", Caps: openAICaps, new: func(c Config) Provider { return newOpenAI(c) }},
 }
 
 func Lookup(name string) (Info, bool) {

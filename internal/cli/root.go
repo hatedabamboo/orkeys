@@ -33,6 +33,8 @@ type app struct {
 	repo      string
 	lockWait  time.Duration
 	diBaseURL string
+	oaBaseURL string
+	oaProject string
 	events    *eventPrinter
 }
 
@@ -58,6 +60,7 @@ func (a *app) root() *cobra.Command {
 Provider commands manage keys directly:
   orkeys openrouter (or) ...   OpenRouter keys
   orkeys deepinfra (di) ...    DeepInfra API tokens
+  orkeys openai (oa) ...       OpenAI project API keys
 
 Inventory commands (validate, plan, apply, rotate, request, issued, import, hygiene, unlock, exporter)
 manage keys of all providers from an inventory repository, with state and secrets in Vault or AWS.
@@ -97,7 +100,7 @@ Environment for inventory commands:
 	pf.StringVar(&a.repo, "repo", envOr(EnvRepo, "."), "path to the inventory repository (env "+EnvRepo+")")
 	pf.DurationVar(&a.lockWait, "lock-wait", 5*time.Minute, "how long to wait for the state lock")
 
-	root.AddCommand(a.openrouterCmd(), a.deepinfraCmd())
+	root.AddCommand(a.openrouterCmd(), a.deepinfraCmd(), a.openaiCmd())
 	root.AddCommand(a.inventoryCmds()...)
 	return root
 }

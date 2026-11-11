@@ -6,7 +6,8 @@
 
 `orkeys` (pronounced "ORKies") is an IaC for your LLM API keys. `orkeys` manages LLM API keys. It has two modes:
 
-- **Provider commands** manage keys at one provider directly: `orkeys openrouter` (`or`) and `orkeys deepinfra` (`di`).
+- **Provider commands** manage keys at one provider directly: `orkeys openrouter` (`or`), `orkeys deepinfra` (`di`)
+  and `orkeys openai` (`oa`).
 - **Inventory mode** manages keys of all providers from an inventory repository, with state and secrets in Vault or
   AWS, rotation, alerts and self-service keys (see [Inventory mode](#inventory-mode)).
 
@@ -31,48 +32,51 @@ make install
 ## Provider support
 
 OpenRouter has full support. DeepInfra is read only: DeepInfra does not let an API key create, limit, disable or
-delete tokens (see [DeepInfra](#deepinfra)). Each write to DeepInfra fails with `401`.
+delete tokens (see [DeepInfra](#deepinfra)). Each write to DeepInfra fails with `401`. OpenAI has no per-key limit and
+no disabled flag: orkeys creates, rotates and deletes OpenAI keys, and tracks their budget only in metrics (see
+[OpenAI](#openai)).
 
 ### Support in provider commands
 
-| Feature | OpenRouter (`or`) | DeepInfra (`di`) |
-|---|---|---|
-| List keys (`list`) | yes | yes. No scopes and no creation time |
-| Show one key (`get`) | yes | yes |
-| Create a key (`create`) | yes | no |
-| Change the limit (`update --limit`) | yes | no |
-| Limit period (`--limit-reset`) | `daily`, `weekly`, `monthly` | `monthly` only |
-| Expiry (`--expires`) | yes | no |
-| Rename (`update --name`) | yes | no |
-| Change scopes (`update --scopes`) | no scopes | no |
-| List possible scopes (`scopes`) | no scopes | yes |
-| Disable a key (`disable`) | yes | no |
-| Enable a key (`enable`) | yes | no command |
-| Delete a key (`delete`) | yes | no |
-| Workspaces (`--workspace`) | yes | no |
-| Spend shown | day, week, month, total | month |
-| Last use shown | yes | no |
+| Feature | OpenRouter (`or`) | DeepInfra (`di`) | OpenAI (`oa`) |
+|---|---|---|---|
+| List keys (`list`) | yes | yes. No scopes and no creation time | yes. Keys of users and service accounts |
+| Show one key (`get`) | yes | yes | yes |
+| Create a key (`create`) | yes | no | yes. One service account per key |
+| Change the limit (`update --limit`) | yes | no | no per-key limit |
+| Limit period (`--limit-reset`) | `daily`, `weekly`, `monthly` | `monthly` only | no per-key limit |
+| Expiry (`--expires`) | yes | no | yes. At most 365d |
+| Rename (`update --name`) | yes | no | no |
+| Change scopes (`update --scopes`) | no scopes | no | yes |
+| List possible scopes (`scopes`) | no scopes | yes | no |
+| Disable a key (`disable`) | yes | no | no |
+| Enable a key (`enable`) | yes | no command | no |
+| Delete a key (`delete`) | yes | no | yes |
+| Workspaces (`--workspace`) | yes | no | one project per call (`--project`), required |
+| Spend shown | day, week, month, total | month | day, week, month |
+| Last use shown | yes | no | yes |
 
 ### Support in inventory mode
 
-| Feature | OpenRouter | DeepInfra |
-|---|---|---|
-| `validate`, `state` | yes | yes |
-| `plan` | yes | yes |
-| `apply`: create a key | yes | no |
-| `apply`: set the limit | yes | no |
-| `apply`: `disabled: true` | yes. Sets the disabled flag | no |
-| `apply`: revoke a deleted manifest | yes | no |
-| `budget.reset` | `daily`, `weekly`, `monthly` | `monthly` only |
-| `scopes` field | no | yes. Used only at create |
-| `rotate` | yes. The key also has a native expiry | no |
-| `request`, `revoke` | yes | no |
-| `import`: print manifests | yes | yes |
-| `apply`: adopt an `import` key | yes | no |
-| `hygiene`: revoke keys of people who left | yes | no |
-| `hygiene`: find unused keys | yes | no. DeepInfra has no last use |
-| `exporter`: spend and limits | yes | yes. Spend this month only |
-| `exporter`: last use | yes | no |
+| Feature | OpenRouter | DeepInfra | OpenAI |
+|---|---|---|---|
+| `validate`, `state` | yes | yes | yes |
+| `plan` | yes | yes | yes |
+| `apply`: create a key | yes | no | yes |
+| `apply`: set the limit | yes | no | no. The budget is only a metric |
+| `apply`: `disabled: true` | yes. Sets the disabled flag | no | no. `validate` rejects it |
+| `apply`: revoke a deleted manifest | yes | no | yes |
+| `budget.reset` | `daily`, `weekly`, `monthly` | `monthly` only | `daily`, `weekly`, `monthly`. Only a metric |
+| `scopes` field | no | yes. Used only at create | yes. Used only at create |
+| `rotate` | yes. The key also has a native expiry | no | yes. The key also has a native expiry. `ttl` at most 365d |
+| `request`, `revoke` | yes | no | yes |
+| `import`: print manifests | yes | yes | yes |
+| `apply`: adopt an `import` key | yes | no | yes |
+| `hygiene`: revoke keys of people who left | yes | no | yes |
+| `hygiene`: find unused keys | yes | no. DeepInfra has no last use | yes |
+| `exporter`: spend | yes | yes. Spend this month only | yes |
+| `exporter`: hard limit | yes | yes | no. Budget only |
+| `exporter`: last use | yes | no | yes |
 
 ## Provider commands
 
@@ -141,6 +145,43 @@ What we found about the alternative, scoped JWTs (`POST /v1/scoped-jwt`), tested
 
 orkeys does not use JWTs. To manage DeepInfra traffic fully, route it through OpenRouter with DeepInfra as the
 provider: the keys are then OpenRouter keys.
+
+### OpenAI
+
+`orkeys openai` (alias `oa`) uses the [Admin API](https://platform.openai.com/docs/api-reference/administration) to
+manage the API keys of one project. Create an Admin API key at
+[platform.openai.com/settings/organization/admin-keys](https://platform.openai.com/settings/organization/admin-keys).
+An Admin API key cannot call models.
+
+| Variable | Required | Purpose |
+|---|---|---|
+| `OPENAI_ADMIN_KEY` | yes | Admin API key |
+| `OPENAI_PROJECT_ID` | yes | Project ID (`proj_...`). Same as `--project` |
+| `OPENAI_API_BASE` | no | API base URL. Default: `https://api.openai.com/v1` |
+
+```sh
+orkeys oa list                          # keys with spend this month
+orkeys oa list -o wide                  # with owner, day and week spend
+orkeys oa get ci
+orkeys oa create --name ci --expires 90d
+orkeys oa create --name reader --scopes api.all.read
+KEY=$(orkeys oa create --name tmp --expires 12h -q)   # print only the secret
+orkeys oa update ci --expires 30d       # new expiry, counted from now
+orkeys oa delete ci -y
+```
+
+Limits of the OpenAI Admin API:
+
+- OpenAI has no per-key spend limit. In inventory mode, orkeys keeps `budget` only as a metric
+  (`orkeys_key_budget_usd`). Limits per project and per organization are set in the OpenAI dashboard.
+- OpenAI has no disabled flag. `delete` is the only way to revoke a key.
+- The Admin API cannot create a key for a user. `create` makes a service account with the key name, and then one key
+  for it. `delete` deletes the key, and also the service account when the account has no other keys.
+- A key cannot be renamed. The expiry is at most 365 days, and `update --expires` counts it from the time of the call.
+- Spend comes from the costs endpoint (`/organization/costs`), in 1-day UTC buckets. OpenAI fills them with a delay,
+  so the spend of today is not complete. A week starts on Monday.
+
+Commands that take `<key>` accept a key ID or an exact key name.
 
 Run `orkeys <provider> <command> --help` to see all flags.
 
@@ -224,9 +265,9 @@ Unknown fields are errors, so a typo does not pass silently.
 | `secrets` | `vault` | Secrets store: `vault` or `aws` (Secrets Manager) |
 | `providers[]` | | Provider accounts. A list of `{name, kind, ...}`, or a map from name to config. See [Providers](#providers) |
 | `providers[].name` | | Name used in manifests (`provider:`), kinds, state and metrics. Matches `^[a-z][a-z0-9-]*$` |
-| `providers[].kind` | the name | Provider type: `openrouter` or `deepinfra` |
+| `providers[].kind` | the name | Provider type: `openrouter`, `deepinfra` or `openai` |
 | `providers[].management_key` | | Secret path with field `key` (and optional `self_id`, `workspace`, `base_url`). Optional if `ORKEYS_<NAME>_KEY` is set |
-| `providers[].workspace`, `base_url` | | OpenRouter workspace; API base URL |
+| `providers[].workspace`, `base_url` | | OpenRouter workspace or OpenAI project ID (required for `openai`); API base URL |
 | `envs` | `[prod, staging, dev]` | Allowed `env` values of manifests |
 | `name_prefix` | `{env}-{team}-` | Required start of key names. `{env}` and `{team}` are replaced. `""` turns the check off |
 | `naming` | `^[a-z0-9][a-z0-9._-]*$` | Regex that every key name must match |
@@ -249,8 +290,11 @@ providers:
   - name: openrouter-public
     kind: openrouter
     management_key: secret/orkeys/providers/openrouter-public
-  - name: deepinfra                 # kind defaults to the name
+  - name: deepinfra                                    # kind defaults to the name
     management_key: secret/orkeys/providers/deepinfra
+  - name: openai
+    management_key: secret/orkeys/providers/openai     # an Admin API key
+    workspace: proj_abc123                             # the project that holds the keys
 ```
 
 The map form still works. The map key is the name, and the kind defaults to it:
@@ -364,14 +408,14 @@ service (Alertmanager, a CI step, a bot) can route them.
 | `env` | yes | One of `envs` |
 | `service` | no | Free text; exported as a metric label |
 | `description` | yes | |
-| `scopes` | no | DeepInfra only. Default `[inference]`. `unrestricted` is not allowed |
-| `budget.limit` | no | Limit in USD at the provider; the provider blocks the key when spend in the period reaches it. Default: the kind `budget.limit`. Up to the kind `max_limit` |
+| `scopes` | no | DeepInfra and OpenAI. DeepInfra default: `[inference]`; `unrestricted` is not allowed. OpenAI default: all permissions of the service account; for example `[api.all.read]` |
+| `budget.limit` | no | Limit in USD at the provider; the provider blocks the key when spend in the period reaches it. OpenAI has no per-key limit: orkeys only exports the budget as a metric. Default: the kind `budget.limit`. Up to the kind `max_limit` |
 | `budget.reset` | no | Limit period: `daily`, `weekly`, `monthly` (DeepInfra: monthly only). Default: the kind `budget.reset` |
-| `ttl` | no | `90d`, `2w`, `24h`. Default and maximum: the kind `ttl` |
+| `ttl` | no | `90d`, `2w`, `24h`. Default and maximum: the kind `ttl`. OpenAI: at most `365d` |
 | `secret.path`, `secret.field` | path: yes | Where the key goes. Vault: `<mount>/<path>`; AWS: secret name. Field default `api_key`. Other fields in the same secret are kept. `secret` is one mapping or a list of mappings: orkeys writes the same key to each place |
 | `consumers[]` | no | `type` (`eso`, `direct` or `github`). For `eso` and `direct`: `cluster`, `namespace`, `externalsecret` (eso), `restart` (`deployment/x`, `statefulset/x`, `daemonset/x`, `cronjob/x`). orkeys restarts only what `restart` lists. For `github`: `repo` (`owner/repo`) or `org`, `environment` (repo only), `name`, `visibility` (org only: `private` (default) or `all`). See [GitHub Actions secrets](#github-actions-secrets) |
 | `import.id`, `import.name` | no | Adopt an existing provider key instead of creating one. `name` is its current name at the provider. See below |
-| `disabled` | no | `true` disables the key at the provider and stops its rotation. Default `false`. See below |
+| `disabled` | no | `true` disables the key at the provider and stops its rotation. Default `false`. Not for OpenAI keys. See below |
 
 ```yaml
 secret:                             # one key in two places; each rotation updates both
@@ -445,7 +489,8 @@ only its own fields from the secrets.
 
 Set `disabled: true` in the manifest to stop a key and keep its state and secret. `plan` shows `disable`, and `apply`
 disables the key at the provider (`key_disabled` event). OpenRouter has a disabled flag. DeepInfra has none, so orkeys
-sets the limit to 0. A new or imported key with `disabled: true` is disabled right after `apply` creates or adopts it.
+sets the limit to 0. OpenAI has neither, so `validate` rejects `disabled: true` on OpenAI keys; delete the manifest to
+revoke the key. A new or imported key with `disabled: true` is disabled right after `apply` creates or adopts it.
 
 A disabled key does not rotate, and `rotate --now` fails for it. `plan` does not change its limit, and `hygiene` does
 not report it as unused. An OpenRouter key still has its native expiry; after it expires, `plan` recreates it as a
@@ -618,13 +663,14 @@ races with a takeover of an expired lock can remove the new holder's lock.
    store themselves) get no force-sync, only their `restart` targets. CronJobs are not restarted; the next run reads
    the new secret. `github` consumers get the new key written to their GitHub Actions secrets.
 3. 15 minutes after the switch, a `rotate` run records the old key's usage (total usage on OpenRouter, spend this
-   month on DeepInfra). After `revoke_grace` (24h), `rotate` compares it again. If the usage grew, a consumer still has
+   month on DeepInfra and OpenAI). OpenAI reports spend with a delay, so use a `revoke_grace` of at least 24h for
+   OpenAI keys. After `revoke_grace` (24h), `rotate` compares it again. If the usage grew, a consumer still has
    the old key: orkeys does not revoke it and marks the rotation as failed. If no run recorded the usage in between,
    the run at revoke time records it and the next run revokes. Run `rotate` hourly.
 4. A failed rotation sends an alert and stops. Fix the cause, then run `orkeys rotate --retry <key>`. The old key stays
    active until then.
 
-OpenRouter keys also get a native expiry at `ttl`. DeepInfra keys have none; orkeys revokes them itself.
+OpenRouter and OpenAI keys also get a native expiry at `ttl`. DeepInfra keys have none; orkeys revokes them itself.
 
 ### Requested keys
 
@@ -667,14 +713,16 @@ The exporter polls the providers every `--interval` (default 10m) and serves the
 metrics; `/healthz` returns 200 after the first poll. It needs read access to the state and to the management keys.
 Key series have the labels `name`, `team`, `kind`, `env`, `provider`, `service`, `owner`, `notify_channel`,
 `alert_channel` and `reset`, so Alertmanager can route by team and channel. orkeys has no alert thresholds: an alert
-rule compares `orkeys_key_spend_usd` with `orkeys_key_hard_limit_usd`, for example `spend / limit > 0.8`.
+rule compares `orkeys_key_spend_usd` with `orkeys_key_budget_usd`, for example `spend / budget > 0.8`. For OpenAI keys
+this rule is the only control of spend: OpenAI does not stop a key at its budget.
 
 | Metric | Meaning |
 |---|---|
 | `orkeys_key_spend_usd` | Spend in the current limit period (`reset`: today, this week or this month) |
-| `orkeys_key_hard_limit_usd` | Limit at the provider for the same period |
+| `orkeys_key_budget_usd` | `budget.limit` from the manifest for the same period |
+| `orkeys_key_hard_limit_usd` | Limit at the provider for the same period. Not for providers without a per-key limit (OpenAI) |
 | `orkeys_key_expires_timestamp_seconds` | Expiry |
-| `orkeys_key_last_used_timestamp_seconds` | Last use (OpenRouter only). OpenRouter reports the request time for recently used keys, so treat it as "recently used", not as an exact time |
+| `orkeys_key_last_used_timestamp_seconds` | Last use (OpenRouter and OpenAI). OpenRouter reports the request time for recently used keys, so treat it as "recently used", not as an exact time |
 | `orkeys_key_rotation_state` | 0 idle, 1 consumers not synced, 2 old key waits for revoke, 4 failed |
 | `orkeys_key_missing` | 1 if the key is not found at the provider |
 | `orkeys_unmanaged_keys{provider}` | Provider keys without state |
@@ -705,6 +753,7 @@ Layout:
 |---|---|
 | `internal/openrouter` | HTTP client for the OpenRouter Management API |
 | `internal/deepinfra` | HTTP client for DeepInfra API tokens and key limits |
+| `internal/openai` | HTTP client for the OpenAI Admin API: project keys, service accounts, costs |
 | `internal/httpx` | JSON over HTTP with retries for GET |
 | `internal/provider` | common interface and registry of the providers |
 | `internal/manifest` | inventory loading and validation |
@@ -713,7 +762,7 @@ Layout:
 | `internal/engine` | plan, apply, rotate, request, issued, revoke, state listing, hygiene, import, report |
 | `internal/exporter` | Prometheus metrics |
 | `internal/kube`, `internal/deliver`, `internal/github` | kubectl, age delivery, org membership, Actions secrets |
-| `internal/cli` | cobra commands: `openrouter.go`, `deepinfra.go`, `inventory.go`, `exporter_cmd.go`; wiring in `wire.go`, output in `render.go` |
+| `internal/cli` | cobra commands: `openrouter.go`, `deepinfra.go`, `openai.go`, `inventory.go`, `exporter_cmd.go`; wiring in `wire.go`, output in `render.go` |
 | `examples/inventory` | example inventory repository with rotate and hygiene workflows; a test keeps it valid |
 | `internal/values` | input parsing and formatting |
 
