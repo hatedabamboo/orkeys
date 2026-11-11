@@ -1,8 +1,9 @@
 # orkeys: instructions for agents
 
-orkeys manages LLM provider API keys (OpenRouter, DeepInfra). It has two modes:
+orkeys manages LLM provider API keys (OpenRouter, DeepInfra, OpenAI). It has two modes:
 
-- Provider commands: `orkeys openrouter` (`or`) and `orkeys deepinfra` (`di`) list and change keys at one provider.
+- Provider commands: `orkeys openrouter` (`or`), `orkeys deepinfra` (`di`) and `orkeys openai` (`oa`) list and change
+  keys at one provider.
 - Inventory mode: a git repository of YAML manifests is the source of truth. orkeys makes the providers, the secrets
   store, Kubernetes and GitHub Actions secrets match it, rotates keys and exports metrics.
 
@@ -22,11 +23,11 @@ orkeys manages LLM provider API keys (OpenRouter, DeepInfra). It has two modes:
 | Path | Contents |
 |---|---|
 | `main.go` | Entry point. Sets `main.version` from ldflags |
-| `internal/cli` | Cobra commands: `openrouter.go`, `deepinfra.go`, `inventory.go`, `exporter_cmd.go`. Wiring in `wire.go`, output in `render.go` and `output.go` |
+| `internal/cli` | Cobra commands: `openrouter.go`, `deepinfra.go`, `openai.go`, `inventory.go`, `exporter_cmd.go`. Wiring in `wire.go`, output in `render.go` and `output.go` |
 | `internal/engine` | Inventory logic: `plan.go`, `apply.go`, `rotate.go`, `request.go`, `revoke.go`, `tracked.go`, `hygiene.go`, `import.go`, `teams.go`, `github.go`, `event.go`. Test fakes in `fakes_test.go` |
 | `internal/manifest` | Load and validate `policy.yaml`, `team.yaml` and key manifests. Types in `types.go`. Test repo in `testdata/repo` |
-| `internal/provider` | Common provider interface and registry; OpenRouter and DeepInfra adapters |
-| `internal/openrouter`, `internal/deepinfra` | HTTP clients for the provider APIs |
+| `internal/provider` | Common provider interface and registry; OpenRouter, DeepInfra and OpenAI adapters |
+| `internal/openrouter`, `internal/deepinfra`, `internal/openai` | HTTP clients for the provider APIs |
 | `internal/httpx` | JSON over HTTP, retries GET on 429 and 5xx |
 | `internal/state`, `internal/secrets` | State store and secrets store interfaces; state lock |
 | `internal/vault`, `internal/s3store`, `internal/awssm`, `internal/backend` | Vault KV v2, S3, AWS Secrets Manager, and the factory that picks one |

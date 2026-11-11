@@ -1,5 +1,18 @@
 # CHANGELOG
 
+## v0.3.0 (2026-11-11)
+
+- (feat) `openai` provider kind and `orkeys openai` (`oa`) commands: `list`, `get`, `create`, `update`, `delete`. They
+  use an OpenAI Admin API key and one project (`workspace` in `policy.yaml`, `--project` or `OPENAI_PROJECT_ID`).
+  orkeys creates one service account per key and deletes the account with its last key (#23) [ff22011](https://github.com/hatedabamboo/orkeys/commit/ff22011db11d7b9b4e99d43e6c6eba77ac470ee6)
+- (feat) OpenAI keys work in inventory mode: `apply`, `rotate` with a native expiry, `request`, `revoke`, `import` and
+  `hygiene`. OpenAI has no per-key limit: `budget` is only a metric, and `validate` rejects `disabled: true` and a
+  `ttl` over `365d` on OpenAI keys (#23) [ff22011](https://github.com/hatedabamboo/orkeys/commit/ff22011db11d7b9b4e99d43e6c6eba77ac470ee6)
+- (feat) `orkeys_key_budget_usd` metric: the manifest `budget.limit` of each key, per period (#23) [ff22011](https://github.com/hatedabamboo/orkeys/commit/ff22011db11d7b9b4e99d43e6c6eba77ac470ee6)
+- (change) `orkeys_key_hard_limit_usd` is exported only for providers with a per-key limit (OpenRouter, DeepInfra). To
+  alert on OpenAI keys, compare `orkeys_key_spend_usd` with `orkeys_key_budget_usd` (#23) [ff22011](https://github.com/hatedabamboo/orkeys/commit/ff22011db11d7b9b4e99d43e6c6eba77ac470ee6)
+- (docs) README shows what each provider supports in provider commands and in inventory mode (#23) [5250e54](https://github.com/hatedabamboo/orkeys/commit/5250e54b93d9cb4902acae3948b37ba6818a87b6) [ff22011](https://github.com/hatedabamboo/orkeys/commit/ff22011db11d7b9b4e99d43e6c6eba77ac470ee6)
+
 ## v0.2.6 (2026-11-11)
 
 - (feat) `orkeys revoke <name>...` revokes requested keys before they expire: it deletes the provider key, the secret

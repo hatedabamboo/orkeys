@@ -177,7 +177,13 @@ func (x *Exporter) render() []byte {
 			}
 		},
 		func(st *state.State, l []string, _ *provider.Key) {
-			w.gauge("orkeys_key_hard_limit_usd", "Limit set at the provider in USD, per period (label reset).", l, st.LimitUSD)
+			w.gauge("orkeys_key_budget_usd", "Budget from the manifest in USD, per period (label reset).", l, st.LimitUSD)
+		},
+		func(st *state.State, l []string, _ *provider.Key) {
+			// A provider without a per-key limit does not enforce the budget, so there is no hard limit to show.
+			if p, ok := x.Providers[st.Provider]; ok && p.Caps().PerKeyLimit {
+				w.gauge("orkeys_key_hard_limit_usd", "Limit set at the provider in USD, per period (label reset).", l, st.LimitUSD)
+			}
 		},
 		func(st *state.State, l []string, _ *provider.Key) {
 			w.gauge("orkeys_key_expires_timestamp_seconds", "Key expiry time.", l, float64(st.ExpiresAt.Unix()))
