@@ -12,12 +12,9 @@ type Candidate struct {
 	Key      *provider.Key `json:"key"`
 }
 
+// Import returns the provider keys that no manifest and no state names.
 func (e *Engine) Import(ctx context.Context) ([]Candidate, error) {
-	plan, err := e.Plan(ctx)
-	if err != nil {
-		return nil, err
-	}
-	lists, err := e.listAll(ctx)
+	plan, lists, err := e.plan(ctx)
 	if err != nil {
 		return nil, err
 	}

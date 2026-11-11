@@ -31,10 +31,7 @@ func (p *prov) List(context.Context) ([]provider.Key, error) {
 func (p *prov) Create(context.Context, provider.Spec) (provider.Key, string, error) {
 	return provider.Key{}, "", nil
 }
-func (p *prov) SetLimit(context.Context, string, *float64, string) error { return nil }
-func (p *prov) Disable(context.Context, string) error                    { return nil }
-func (p *prov) Enable(context.Context, string) error                     { return nil }
-func (p *prov) Delete(context.Context, string) error                     { return nil }
+func (p *prov) Delete(context.Context, string) error { return nil }
 
 func TestMetrics(t *testing.T) {
 	spend, month := 42.5, 99.0
@@ -103,5 +100,23 @@ func TestMetricsWithoutProviderLimit(t *testing.T) {
 	}
 	if strings.Contains(out, "orkeys_key_hard_limit_usd") {
 		t.Errorf("no hard limit for a provider without per-key limits:\n%s", out)
+	}
+}
+
+type beatStore struct{ states }
+
+func (beatStore) Heartbeats(context.Context) (map[string]time.Time, error) {
+	return map[string]time.Time{"rotate": time.Unix(1800000000, 0)}, nil
+}
+
+func (beatStore) PutHeartbeat(context.Context, string, time.Time) error { return nil }
+
+func TestHeartbeatMetric(t *testing.T) {
+	x := &Exporter{Store: beatStore{}, Providers: provider.Set{}, Log: &strings.Builder{}}
+	x.Poll(context.Background())
+	rec := httptest.NewRecorder()
+	x.ServeHTTP(rec, httptest.NewRequest("GET", "/metrics", nil))
+	if want := `orkeys_last_success_timestamp_seconds{operation="rotate"} 1.8e+09`; !strings.Contains(rec.Body.String(), want) {
+		t.Fatalf("want %q in:\n%s", want, rec.Body.String())
 	}
 }

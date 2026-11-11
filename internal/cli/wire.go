@@ -3,9 +3,12 @@ package cli
 import (
 	"cmp"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
+	"maps"
 	"os"
 	"strings"
 	"time"
@@ -46,16 +49,34 @@ func (a *app) loadInventory() (*manifest.Inventory, error) {
 	return inv, nil
 }
 
+// eventPrinter sends each event to all sinks at the time of the event.
+// A killed run prints no JSON document. The events file and the webhook still have its events.
 type eventPrinter struct {
 	out   io.Writer
 	quiet bool
 	log   engine.EventLog
+	file  io.Writer
+	hook  *webhook
 }
 
 func (p *eventPrinter) Emit(ev engine.Event) {
 	p.log.Emit(ev)
 	if !p.quiet {
 		fmt.Fprintln(p.out, ev.String())
+	}
+	if p.file != nil {
+		b, _ := json.Marshal(ev)
+		if _, err := p.file.Write(append(b, '\n')); err != nil {
+			fmt.Fprintln(os.Stderr, "orkeys: write events file:", err)
+		}
+		if f, ok := p.file.(*os.File); ok {
+			_ = f.Sync()
+		}
+	}
+	if p.hook != nil {
+		if err := p.hook.post(ev); err != nil {
+			fmt.Fprintln(os.Stderr, "orkeys: events webhook:", err)
+		}
 	}
 }
 
@@ -88,11 +109,12 @@ func providerEnv(name, suffix string) string {
 }
 
 func providerFromSecrets(ctx context.Context, sec secrets.Store, name string, cfg manifest.ProviderConfig, timeout time.Duration) (provider.Provider, error) {
-	pc := provider.Config{BaseURL: cfg.BaseURL, Workspace: cfg.Workspace, Timeout: timeout}
+	pc := provider.Config{BaseURL: cfg.BaseURL, Workspace: cfg.Workspace, Options: maps.Clone(cfg.Options), Timeout: timeout}
 	kind := cfg.Kind
 	if kind == "" {
 		kind = name
 	}
+	info, _ := provider.Lookup(kind)
 	envKey := providerEnv(name, "KEY")
 	if v := strings.TrimSpace(os.Getenv(envKey)); v != "" {
 		pc.Key = v
@@ -112,6 +134,15 @@ func providerFromSecrets(ctx context.Context, sec secrets.Store, name string, cf
 	}
 	if pc.BaseURL == "" {
 		pc.BaseURL = data["base_url"]
+	}
+	// The management key secret can hold provider options. A value in policy.yaml has priority.
+	for _, opt := range info.Options {
+		if v := data[opt]; v != "" && pc.Options[opt] == "" {
+			if pc.Options == nil {
+				pc.Options = map[string]string{}
+			}
+			pc.Options[opt] = v
+		}
 	}
 	if pc.Key == "" {
 		return nil, fmt.Errorf("%s: field \"key\" is empty in %s (or set %s)", name, cfg.ManagementKey, envKey)
@@ -142,46 +173,75 @@ func (a *app) engine(ctx context.Context, outDir string) (*engine.Engine, error)
 		providers[name] = p
 	}
 	a.events = &eventPrinter{out: os.Stdout, quiet: a.output == "json"}
+	if a.eventsFile != "" {
+		f, err := os.OpenFile(a.eventsFile, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o644)
+		if err != nil {
+			return nil, fmt.Errorf("events file: %w", err)
+		}
+		a.events.file = f
+	}
+	if a.eventsWebhook != "" {
+		a.events.hook = &webhook{url: a.eventsWebhook}
+	}
 	e := &engine.Engine{
 		Inv:       inv,
 		Providers: providers,
 		State:     st,
 		Secrets:   sec,
-		Kube:      &kube.Kubectl{Context: inv.Policy.KubeContext},
-		Events:    a.events,
-		Deliverer: &deliver.AgeSSH{OutDir: outDir, KeysURL: inv.Policy.GitHub.KeysURL},
-		RunURL:    state.RunURL(),
+		Notifiers: map[string]engine.Notifier{
+			manifest.ConsumerESO:    engine.KubeNotifier{Kube: &kube.Kubectl{Context: inv.Policy.KubeContext}},
+			manifest.ConsumerDirect: engine.KubeNotifier{Kube: &kube.Kubectl{Context: inv.Policy.KubeContext}},
+		},
+		Pushers: map[string]engine.Pusher{
+			manifest.ConsumerGitHub: engine.Unavailable{Reason: "github consumers: no GitHub token (set " + EnvGitHubSecretsToken + " or " + EnvGitHubToken + ")"},
+		},
+		NotifyConcurrency: notifyConcurrency,
+		Events:            a.events,
+		Deliverer:         &deliver.AgeSSH{OutDir: outDir, KeysURL: inv.Policy.GitHub.KeysURL},
+		RunURL:            state.RunURL(),
+	}
+	if a.logFormat == "json" {
+		e.Logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	}
 	if tok := os.Getenv(EnvGitHubToken); tok != "" && inv.Policy.GitHub.Org != "" {
 		e.Org = &github.Org{Name: inv.Policy.GitHub.Org, Token: tok, API: inv.Policy.GitHub.APIURL}
 	}
 	if tok := cmp.Or(os.Getenv(EnvGitHubSecretsToken), os.Getenv(EnvGitHubToken)); tok != "" {
-		e.GitHub = &github.Secrets{Token: tok, API: inv.Policy.GitHub.APIURL}
+		e.Pushers[manifest.ConsumerGitHub] = engine.GitHubPusher{Secrets: &github.Secrets{Token: tok, API: inv.Policy.GitHub.APIURL}}
 	}
 	return e, nil
 }
 
 var lockTTL = 15 * time.Minute
 
+// notifyConcurrency is how many eso and direct consumers of one key sync and restart at a time.
+const notifyConcurrency = 4
+
 func (a *app) withLock(ctx context.Context, e *engine.Engine, op string, fn func(context.Context) error) error {
-	l, ok := e.State.(state.Locker)
-	if !ok {
-		return fn(ctx)
-	}
-	le, err := state.Lock(ctx, l, state.DefaultHolder(), op, lockTTL, a.lockWait)
+	le, err := state.Lock(ctx, e.State, state.DefaultHolder(), op, lockTTL, a.lockWait)
 	if err != nil {
 		return err
 	}
+	e.Guard = le.Err
+	defer func() { e.Guard = nil }()
 	lctx, cancel := context.WithCancel(ctx)
 	go func() {
 		select {
 		case <-le.Lost():
-			fmt.Fprintln(os.Stderr, "orkeys:", state.ErrLockLost)
+			fmt.Fprintln(os.Stderr, "orkeys:", le.Err())
 			cancel()
 		case <-lctx.Done():
 		}
 	}()
 	err = fn(lctx)
+	if err == nil {
+		if hb, ok := e.State.(state.Heartbeats); ok {
+			// A failed heartbeat write does not fail the run. The missing heartbeat raises an alert later.
+			if herr := hb.PutHeartbeat(lctx, op, time.Now()); herr != nil {
+				fmt.Fprintf(os.Stderr, "orkeys: record heartbeat of %s: %v\n", op, herr)
+			}
+		}
+	}
 	cancel()
 	if rerr := le.Release(context.Background()); rerr != nil {
 		err = errors.Join(err, fmt.Errorf("release lock %s: %w", le.ID(), rerr))

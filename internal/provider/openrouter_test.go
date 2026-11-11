@@ -110,13 +110,21 @@ func TestOpenRouterUpdateAndDelete(t *testing.T) {
 	f, p := newTestOR(t)
 	ctx := context.Background()
 	limit := 50.0
-	if err := p.SetLimit(ctx, "h1", &limit, "weekly"); err != nil {
+	l, err := AsLimiter(p)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := p.SetLimit(ctx, "h1", nil, ""); err != nil {
+	if err := l.SetLimit(ctx, "h1", &limit, "weekly"); err != nil {
 		t.Fatal(err)
 	}
-	if err := p.Disable(ctx, "h1"); err != nil {
+	if err := l.SetLimit(ctx, "h1", nil, ""); err != nil {
+		t.Fatal(err)
+	}
+	d, err := AsDisabler(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Disable(ctx, "h1"); err != nil {
 		t.Fatal(err)
 	}
 	want := []string{

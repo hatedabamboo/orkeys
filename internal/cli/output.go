@@ -67,8 +67,32 @@ func writeKeyAs(w io.Writer, k openrouter.Key, format string) error {
 		return printJSON(w, k)
 	}
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-	for _, row := range values.Fields(k) {
+	for _, row := range orFields(k) {
 		fmt.Fprintf(tw, "%s:\t%s\n", row[0], row[1])
 	}
 	return tw.Flush()
+}
+
+func orFields(k openrouter.Key) [][2]string {
+	return [][2]string{
+		{"Name", k.Name},
+		{"Label", k.Label},
+		{"Hash", k.Hash},
+		{"Status", k.Status()},
+		{"Limit", values.USDPtr(k.Limit)},
+		{"Limit remaining", values.USDPtr(k.LimitRemaining)},
+		{"Limit reset", values.Str(k.LimitReset)},
+		{"BYOK in limit", values.YesNo(k.IncludeBYOKInLimit)},
+		{"Usage (total)", values.USD(k.Usage)},
+		{"Usage (day/week/month)", fmt.Sprintf("%s / %s / %s", values.USD(k.UsageDaily), values.USD(k.UsageWeekly), values.USD(k.UsageMonthly))},
+		{"BYOK usage (total)", values.USD(k.BYOKUsage)},
+		{"BYOK usage (day/week/month)", fmt.Sprintf("%s / %s / %s", values.USD(k.BYOKUsageDaily), values.USD(k.BYOKUsageWeekly), values.USD(k.BYOKUsageMonthly))},
+		{"Expires", values.Time(k.ExpiresAt)},
+		{"Last used", values.Time(k.LastUsedAt)},
+		{"Created", values.Time(&k.CreatedAt)},
+		{"Updated", values.Time(k.UpdatedAt)},
+		{"Workspace", values.Str(&k.WorkspaceID)},
+		{"Creator user", values.Str(k.CreatorUserID)},
+		{"External user", values.Str(k.ExternalUser)},
+	}
 }

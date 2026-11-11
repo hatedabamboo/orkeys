@@ -96,9 +96,17 @@ func (o *openRouter) Disable(ctx context.Context, id string) error {
 	return err
 }
 
-func (o *openRouter) Enable(ctx context.Context, id string) error {
+// Enable clears the disabled flag and sets the limit in one request.
+func (o *openRouter) Enable(ctx context.Context, id string, limit *float64, reset string) error {
 	f := false
-	_, err := o.c.Update(ctx, id, openrouter.UpdateRequest{Disabled: &f})
+	req := openrouter.UpdateRequest{Disabled: &f}
+	if limit != nil {
+		req.Limit = openrouter.Value(*limit)
+		if reset != "" {
+			req.LimitReset = openrouter.Value(reset)
+		}
+	}
+	_, err := o.c.Update(ctx, id, req)
 	return err
 }
 

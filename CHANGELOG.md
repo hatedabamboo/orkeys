@@ -1,5 +1,52 @@
 # CHANGELOG
 
+## v0.4.0 (2026-11-11)
+
+- (change) Breaking: upgrade all runners (CI and laptops) together. Each state now has `schema: 2`, and orkeys refuses
+  to run with a state from a newer orkeys. orkeys up to v0.3.0 has no such check: when it writes a state, it drops
+  the new fields [4c5f830](https://github.com/hatedabamboo/orkeys/commit/4c5f830d0f3f3cbaf1452a46e8e8dd35b4b3bc48)
+- (change) Breaking: the state keeps push consumer targets in `pushed` (`github/<id>`), not in `github_secrets`.
+  orkeys converts an old state when it reads it [4c5f830](https://github.com/hatedabamboo/orkeys/commit/4c5f830d0f3f3cbaf1452a46e8e8dd35b4b3bc48)
+- (change) Breaking: update filters and routing that use the old names. The plan action `sync-github` is now
+  `sync-consumers`. The events `github_synced` and `github_sync_failed` are now `consumers_synced` and
+  `consumers_sync_failed` [4c5f830](https://github.com/hatedabamboo/orkeys/commit/4c5f830d0f3f3cbaf1452a46e8e8dd35b4b3bc48)
+- (change) Breaking: give the AWS role `secretsmanager:DescribeSecret` and `secretsmanager:RestoreSecret`. When orkeys
+  writes to a secret that it scheduled for deletion, it restores the secret and writes only the new field [4c5f830](https://github.com/hatedabamboo/orkeys/commit/4c5f830d0f3f3cbaf1452a46e8e8dd35b4b3bc48)
+- (change) Breaking: `apply` refuses a plan that revokes more than `max_deletes` keys (default 3), before it changes
+  anything. `apply --allow-deletes <n>` raises the limit for one run [4c5f830](https://github.com/hatedabamboo/orkeys/commit/4c5f830d0f3f3cbaf1452a46e8e8dd35b4b3bc48)
+- (change) Breaking: a consumer field of another consumer type (for example `cluster` on a `github` consumer) now
+  fails the load, not `validate` [4c5f830](https://github.com/hatedabamboo/orkeys/commit/4c5f830d0f3f3cbaf1452a46e8e8dd35b4b3bc48)
+- (change) Breaking: a build from source needs Go 1.26. `go.mod` sets `toolchain go1.26.11` [4c5f830](https://github.com/hatedabamboo/orkeys/commit/4c5f830d0f3f3cbaf1452a46e8e8dd35b4b3bc48)
+- (feat) `plan --out <file>` saves the plan with a fingerprint of its actions. `apply --plan <file>` applies only if
+  the new plan is the same [4c5f830](https://github.com/hatedabamboo/orkeys/commit/4c5f830d0f3f3cbaf1452a46e8e8dd35b4b3bc48)
+- (feat) A run that stops while it writes a new key leaves the state in phase `issuing`. `plan` shows `resume`.
+  `apply` and `rotate` finish the change: they copy the new key from a place that has it, or issue another key and
+  treat the lost key as an old key [4c5f830](https://github.com/hatedabamboo/orkeys/commit/4c5f830d0f3f3cbaf1452a46e8e8dd35b4b3bc48)
+- (feat) `plan` shows `reissue` when the `orkeys-key-id` metadata of a secret names another key than the state [4c5f830](https://github.com/hatedabamboo/orkeys/commit/4c5f830d0f3f3cbaf1452a46e8e8dd35b4b3bc48)
+- (feat) `orkeys keys -p <provider>` lists, creates, limits, disables, enables and deletes keys of any provider in
+  `policy.yaml` [4c5f830](https://github.com/hatedabamboo/orkeys/commit/4c5f830d0f3f3cbaf1452a46e8e8dd35b4b3bc48)
+- (feat) `providers[].options` in `policy.yaml`: settings of one provider type. `openai` has `project`; `workspace`
+  still works. Unknown options are errors [4c5f830](https://github.com/hatedabamboo/orkeys/commit/4c5f830d0f3f3cbaf1452a46e8e8dd35b4b3bc48)
+- (feat) `--events-file <path>` appends each event as one JSON line, and `--events-webhook <url>` posts each event, at
+  the time of the event. A killed run keeps its events. `--log-format json` writes progress logs as JSON [4c5f830](https://github.com/hatedabamboo/orkeys/commit/4c5f830d0f3f3cbaf1452a46e8e8dd35b4b3bc48)
+- (feat) Each successful locked run records a heartbeat in the state store. The exporter shows it as
+  `orkeys_last_success_timestamp_seconds{operation}`. Alert on it to find a stopped `rotate` schedule [4c5f830](https://github.com/hatedabamboo/orkeys/commit/4c5f830d0f3f3cbaf1452a46e8e8dd35b4b3bc48)
+- (fix) State writes are conditional: Vault check-and-set, S3 `If-Match` and `If-None-Match`. A write over a state
+  that another process changed fails [4c5f830](https://github.com/hatedabamboo/orkeys/commit/4c5f830d0f3f3cbaf1452a46e8e8dd35b4b3bc48)
+- (fix) When lock renewals fail until 2.5 minutes before the lock expires, orkeys treats the lock as lost and stops
+  writing state [4c5f830](https://github.com/hatedabamboo/orkeys/commit/4c5f830d0f3f3cbaf1452a46e8e8dd35b4b3bc48)
+- (fix) After SIGINT or SIGTERM, the cleanup of a half-done action still runs, for at most 30 seconds per step. `apply`
+  and `rotate` stop between actions. A stopped `rotate` does not mark the rotation as failed [4c5f830](https://github.com/hatedabamboo/orkeys/commit/4c5f830d0f3f3cbaf1452a46e8e8dd35b4b3bc48)
+- (fix) `rotate` does not revoke an OpenAI key that was used after the switch. When the spend of an old key goes
+  down (a new month), `rotate` takes a new baseline and does not revoke [4c5f830](https://github.com/hatedabamboo/orkeys/commit/4c5f830d0f3f3cbaf1452a46e8e8dd35b4b3bc48)
+- (fix) Vault secret field writes and deletes use check-and-set. A change by another client is not lost [4c5f830](https://github.com/hatedabamboo/orkeys/commit/4c5f830d0f3f3cbaf1452a46e8e8dd35b4b3bc48)
+- (fix) `request` refuses a key name that exists (two requests in one second) before it creates a key [4c5f830](https://github.com/hatedabamboo/orkeys/commit/4c5f830d0f3f3cbaf1452a46e8e8dd35b4b3bc48)
+- (security) Go toolchain 1.26.11 fixes standard library vulnerabilities that `govulncheck` reports. Updated
+  `golang.org/x/crypto`, `golang.org/x/term` and `filippo.io/age` [4c5f830](https://github.com/hatedabamboo/orkeys/commit/4c5f830d0f3f3cbaf1452a46e8e8dd35b4b3bc48)
+- (ci) Pull requests run gofmt, vet, tests with the race detector, golangci-lint and govulncheck. Release binaries have
+  `.sha256` files. The example workflows install the release binary and check its checksum [4c5f830](https://github.com/hatedabamboo/orkeys/commit/4c5f830d0f3f3cbaf1452a46e8e8dd35b4b3bc48)
+- (docs) README describes apply safety, how to add a provider and how to add a consumer type [4c5f830](https://github.com/hatedabamboo/orkeys/commit/4c5f830d0f3f3cbaf1452a46e8e8dd35b4b3bc48)
+
 ## v0.3.0 (2026-11-11)
 
 - (feat) `openai` provider kind and `orkeys openai` (`oa`) commands: `list`, `get`, `create`, `update`, `delete`. They

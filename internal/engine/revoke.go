@@ -13,6 +13,9 @@ import (
 // fields and the GitHub secrets, and removes the state. It does not revoke manifest keys, because
 // the next apply would create them again.
 func (e *Engine) Revoke(ctx context.Context, names []string, reason string) error {
+	if err := e.ready(); err != nil {
+		return err
+	}
 	if len(names) == 0 {
 		return errors.New("no key name given")
 	}
@@ -24,6 +27,9 @@ func (e *Engine) Revoke(ctx context.Context, names []string, reason string) erro
 		}
 		if st == nil {
 			return fmt.Errorf("key %s: not in state", n)
+		}
+		if err := state.CheckSchema(st); err != nil {
+			return err
 		}
 		if k := e.Inv.Key(n); k != nil {
 			return fmt.Errorf("key %s: has a manifest; delete the file or set disabled: true", n)

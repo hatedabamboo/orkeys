@@ -3,6 +3,8 @@ package openrouter
 import (
 	"encoding/json"
 	"time"
+
+	"github.com/hatedabamboo/orkeys/internal/nullable"
 )
 
 // Key is an OpenRouter API key as returned by the Management API.
@@ -74,33 +76,13 @@ type CreateResponse struct {
 }
 
 // Nullable is a field that can be absent, explicitly null, or set to a value.
-type Nullable[T any] struct {
-	Set   bool // field is present in the request
-	Valid bool // value is non-null
-	V     T
-}
+type Nullable[T any] = nullable.Value[T]
 
 // Value returns a Nullable that holds v.
-func Value[T any](v T) Nullable[T] { return Nullable[T]{Set: true, Valid: true, V: v} }
+func Value[T any](v T) Nullable[T] { return nullable.Of(v) }
 
 // Null returns a Nullable that is sent as JSON null.
-func Null[T any]() Nullable[T] { return Nullable[T]{Set: true} }
-
-// Ptr returns nil for absent or null, else a pointer to the value.
-func (n Nullable[T]) Ptr() *T {
-	if !n.Set || !n.Valid {
-		return nil
-	}
-	v := n.V
-	return &v
-}
-
-func (n Nullable[T]) json() any {
-	if !n.Valid {
-		return nil
-	}
-	return n.V
-}
+func Null[T any]() Nullable[T] { return nullable.Null[T]() }
 
 // UpdateRequest is the body of PATCH /keys/{hash}. Only set fields are sent.
 type UpdateRequest struct {
@@ -130,10 +112,10 @@ func (u UpdateRequest) MarshalJSON() ([]byte, error) {
 		m["include_byok_in_limit"] = *u.IncludeBYOKInLimit
 	}
 	if u.Limit.Set {
-		m["limit"] = u.Limit.json()
+		m["limit"] = u.Limit.JSON()
 	}
 	if u.LimitReset.Set {
-		m["limit_reset"] = u.LimitReset.json()
+		m["limit_reset"] = u.LimitReset.JSON()
 	}
 	return json.Marshal(m)
 }

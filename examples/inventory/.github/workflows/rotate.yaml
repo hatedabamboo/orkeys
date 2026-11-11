@@ -20,7 +20,8 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  ORKEYS_VERSION: v0.2.0
+  ORKEYS_VERSION: v0.4.0                      # release to install; it must have .sha256 files
+  ORKEYS_EVENTS_FILE: events.jsonl            # gets each event at once; a killed run keeps them
   VAULT_ADDR: ${{ vars.VAULT_ADDR }}
 
 jobs:
@@ -30,13 +31,13 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Setup golang
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version: stable
-
-      - name: Install orkeys
-        run: go install "github.com/hatedabamboo/orkeys@$ORKEYS_VERSION"
+      - name: Install orkeys # release binary, checked against its checksum
+        run: |
+          base="https://github.com/hatedabamboo/orkeys/releases/download/$ORKEYS_VERSION"
+          curl -fsSLO "$base/orkeys-linux-amd64"
+          curl -fsSLO "$base/orkeys-linux-amd64.sha256"
+          sha256sum -c orkeys-linux-amd64.sha256
+          sudo install -m 0755 orkeys-linux-amd64 /usr/local/bin/orkeys
 
       - name: Configure kubectl # one context per cluster in policy.yaml clusters
         env:
@@ -58,13 +59,16 @@ jobs:
           if [ -n "$RETRY" ]; then args+=(--retry "$RETRY"); fi
           orkeys rotate "${args[@]}" --json > orkeys-output.json
 
-      - name: Events # orkeys only prints events; send them on from here if needed
+      - name: Events # set ORKEYS_EVENTS_WEBHOOK to also post each event
         if: always()
         run: |
-          [ -s orkeys-output.json ] || exit 0
           {
             echo "| Level | Type | Key | Channel | Message |"
             echo "|---|---|---|---|---|"
-            jq -r '.events[] | "| \(.level) | \(.type) | `\(.key)` | \(.channel // "") | \(.message) |"' orkeys-output.json
-            jq -r 'if .error then "\n**Error:** \(.error)" else empty end' orkeys-output.json
+            if [ -s events.jsonl ]; then
+              jq -r '"| \(.level) | \(.type) | `\(.key)` | \(.channel // "") | \(.message) |"' events.jsonl
+            fi
+            if [ -s orkeys-output.json ]; then
+              jq -r 'if .error then "\n**Error:** \(.error)" else empty end' orkeys-output.json
+            fi
           } >> "$GITHUB_STEP_SUMMARY"

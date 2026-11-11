@@ -2,8 +2,10 @@ package provider
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 
 	"github.com/hatedabamboo/orkeys/internal/deepinfra"
 	"github.com/hatedabamboo/orkeys/internal/httpx"
@@ -73,7 +75,9 @@ func (d *deepInfra) Create(ctx context.Context, s Spec) (Key, string, error) {
 	}
 	if s.LimitUSD != nil {
 		if err := d.c.SetKeyLimit(ctx, t.TokenID, s.LimitUSD); err != nil {
-			if derr := d.c.DeleteToken(ctx, t.TokenID); derr != nil {
+			dctx, cancel := detached(ctx)
+			defer cancel()
+			if derr := d.c.DeleteToken(dctx, t.TokenID); derr != nil {
 				return Key{}, "", fmt.Errorf("set limit: %w; delete new token %s also failed: %w", err, t.TokenID, derr)
 			}
 			return Key{}, "", fmt.Errorf("set limit (new token deleted): %w", err)
@@ -91,8 +95,18 @@ func (d *deepInfra) Disable(ctx context.Context, id string) error {
 	return d.c.SetKeyLimit(ctx, id, &zero)
 }
 
-// Enable does nothing: a DeepInfra key is disabled by a limit of 0, so the caller sets the limit again.
-func (d *deepInfra) Enable(context.Context, string) error { return nil }
+// Enable sets the limit again. A DeepInfra key is disabled by a limit of 0. With a nil limit, the key has none.
+func (d *deepInfra) Enable(ctx context.Context, id string, limit *float64, _ string) error {
+	return d.c.SetKeyLimit(ctx, id, limit)
+}
+
+// checkDeepInfraScopes refuses unrestricted. An unrestricted key can manage keys and payments.
+func checkDeepInfraScopes(scopes []string) error {
+	if slices.Contains(scopes, "unrestricted") {
+		return errors.New("unrestricted is not allowed")
+	}
+	return nil
+}
 
 func (d *deepInfra) Delete(ctx context.Context, id string) error {
 	err := d.c.DeleteToken(ctx, id)

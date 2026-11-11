@@ -15,10 +15,7 @@ import (
 
 const hour = time.Hour
 
-var (
-	resets       = []string{"daily", "weekly", "monthly"}
-	restartKinds = []string{"deployment", "deploy", "statefulset", "sts", "daemonset", "ds", "cronjob", "cj"}
-)
+var resets = []string{"daily", "weekly", "monthly"}
 
 type Problem struct {
 	Path string
@@ -58,8 +55,20 @@ func (inv *Inventory) Validate() []Problem {
 		if !providerName.MatchString(name) {
 			add("policy.yaml", "providers.%s: name must match %s", name, providerName)
 		}
-		if kind := pol.Providers[name].Kind; !knownProvider(kind) {
-			add("policy.yaml", "providers.%s: unknown kind %q (known: %s)", name, kind, strings.Join(provider.Names(), ", "))
+		pc := pol.Providers[name]
+		info, ok := provider.Lookup(pc.Kind)
+		if !ok {
+			add("policy.yaml", "providers.%s: unknown kind %q (known: %s)", name, pc.Kind, strings.Join(provider.Names(), ", "))
+			continue
+		}
+		for _, opt := range slices.Sorted(maps.Keys(pc.Options)) {
+			if !slices.Contains(info.Options, opt) {
+				known := "none"
+				if len(info.Options) > 0 {
+					known = strings.Join(info.Options, ", ")
+				}
+				add("policy.yaml", "providers.%s.options.%s: unknown option for %s (known: %s)", name, opt, pc.Kind, known)
+			}
 		}
 	}
 	if len(pol.Kinds) == 0 {
@@ -83,6 +92,9 @@ func (inv *Inventory) Validate() []Problem {
 	}
 	if len(pol.Envs) == 0 {
 		add("policy.yaml", "envs: at least one env is required")
+	}
+	if pol.MaxDeletes != nil && *pol.MaxDeletes < 0 {
+		add("policy.yaml", "max_deletes: must not be negative")
 	}
 
 	for dir, t := range inv.Teams {
@@ -160,8 +172,14 @@ func (inv *Inventory) Validate() []Problem {
 		if k.TTL.Duration == 0 {
 			add(p, "ttl: required")
 		}
-		if info, ok := provider.Lookup(pol.ProviderKind(k.Provider)); ok && len(k.Scopes) > 0 && !info.Caps.Scopes {
-			add(p, "scopes: %s keys have no scopes", k.Provider)
+		if info, ok := provider.Lookup(pol.ProviderKind(k.Provider)); ok && len(k.Scopes) > 0 {
+			if !info.Caps.Scopes {
+				add(p, "scopes: %s keys have no scopes", k.Provider)
+			} else if info.CheckScopes != nil {
+				if err := info.CheckScopes(k.Scopes); err != nil {
+					add(p, "scopes: %v", err)
+				}
+			}
 		}
 		if info, ok := provider.Lookup(pol.ProviderKind(k.Provider)); ok {
 			if k.Disabled && !info.Caps.Disable {
@@ -170,9 +188,6 @@ func (inv *Inventory) Validate() []Problem {
 			if info.Caps.MaxExpiry > 0 && k.TTL.Duration > info.Caps.MaxExpiry {
 				add(p, "ttl: more than %s, the longest expiry of %s keys", values.Days(info.Caps.MaxExpiry), k.Provider)
 			}
-		}
-		if slices.Contains(k.Scopes, "unrestricted") {
-			add(p, "scopes: unrestricted is not allowed")
 		}
 
 		if k.Import != nil {
@@ -198,11 +213,6 @@ var kindName = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
 
 // providerName is also used in env var names, with "-" as "_".
 var providerName = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
-
-func knownProvider(kind string) bool {
-	_, ok := provider.Lookup(kind)
-	return ok
-}
 
 func validateKind(pol *Policy, name string, add func(string, string, ...any)) {
 	at := "kinds." + name
@@ -299,83 +309,17 @@ func validateManifestKey(inv *Inventory, k *Key, kp *KindPolicy, add func(string
 	}
 	for i, c := range k.Consumers {
 		where := fmt.Sprintf("consumers[%d]", i)
-		if c.Type == ConsumerGitHub {
-			validateGitHubConsumer(k, c, where, add, secretPaths)
+		c.Spec.Validate(func(format string, args ...any) { add(p, where+format, args...) })
+		ps, ok := c.Spec.(PushSpec)
+		if !ok {
 			continue
 		}
-		if c.Repo != "" || c.Org != "" || c.Environment != "" || c.Name != "" || c.Visibility != "" {
-			add(p, "%s: repo, org, environment, name and visibility are only for type github", where)
+		// Two keys must not write the same push target.
+		// The compare is in lower case. GitHub secret names are case-insensitive.
+		id := "consumer:" + strings.ToLower(c.Type+"/"+ps.TargetID())
+		if prev, ok := secretPaths[id]; ok {
+			add(p, "%s: %s target %s is already written by %s", where, c.Type, ps.TargetID(), prev)
 		}
-		switch c.Type {
-		case ConsumerESO:
-			if c.ExternalSecret == "" {
-				add(p, "%s.externalsecret: required for type eso", where)
-			}
-		case ConsumerDirect:
-			if c.ExternalSecret != "" {
-				add(p, "%s.externalsecret: only for type eso", where)
-			}
-		default:
-			add(p, "%s.type: want eso, direct or github", where)
-		}
-		if c.Cluster == "" || c.Namespace == "" {
-			add(p, "%s: cluster and namespace are required", where)
-		}
-		for _, r := range c.Restart {
-			kind, name, ok := strings.Cut(r, "/")
-			if !ok || name == "" || !slices.Contains(restartKinds, strings.ToLower(kind)) {
-				add(p, "%s.restart: %q is not <deployment|statefulset|daemonset|cronjob>/<name>", where, r)
-			}
-		}
+		secretPaths[id] = k.Name
 	}
-}
-
-var (
-	githubSecretName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
-	githubRepo       = regexp.MustCompile(`^[A-Za-z0-9-]+/[A-Za-z0-9._-]+$`)
-	githubOrg        = regexp.MustCompile(`^[A-Za-z0-9-]+$`)
-)
-
-func validateGitHubConsumer(k *Key, c Consumer, where string, add func(string, string, ...any), seen map[string]string) {
-	p := k.Path
-	if c.Cluster != "" || c.Namespace != "" || c.ExternalSecret != "" || len(c.Restart) > 0 {
-		add(p, "%s: cluster, namespace, externalsecret and restart are not for type github", where)
-	}
-	switch {
-	case c.Name == "":
-		add(p, "%s.name: required for type github", where)
-	case !githubSecretName.MatchString(c.Name) || strings.HasPrefix(strings.ToUpper(c.Name), "GITHUB_"):
-		add(p, "%s.name: %q is not a valid GitHub secret name (letters, digits, _; no GITHUB_ prefix)", where, c.Name)
-	}
-	switch {
-	case (c.Repo == "") == (c.Org == ""):
-		add(p, "%s: set exactly one of repo or org", where)
-	case c.Repo != "" && !githubRepo.MatchString(c.Repo):
-		add(p, "%s.repo: want <owner>/<repo>", where)
-	case c.Org != "" && !githubOrg.MatchString(c.Org):
-		add(p, "%s.org: %q is not a GitHub org name", where, c.Org)
-	}
-	if c.Environment != "" && c.Repo == "" {
-		add(p, "%s.environment: only with repo", where)
-	}
-	if strings.Contains(c.Environment, ":") {
-		add(p, "%s.environment: must not contain ':'", where)
-	}
-	if c.Visibility != "" {
-		if c.Org == "" {
-			add(p, "%s.visibility: only with org", where)
-		} else if c.Visibility != "all" && c.Visibility != "private" {
-			add(p, "%s.visibility: want all or private", where)
-		}
-	}
-	if c.Name == "" || (c.Repo == "") == (c.Org == "") {
-		return
-	}
-	g := GitHubSecret{Org: c.Org, Repo: c.Repo, Environment: c.Environment, Name: c.Name}
-	// GitHub secret names are case-insensitive.
-	id := "github:" + strings.ToLower(g.ID())
-	if prev, ok := seen[id]; ok {
-		add(p, "%s: GitHub secret %s is already written by %s", where, g.ID(), prev)
-	}
-	seen[id] = k.Name
 }

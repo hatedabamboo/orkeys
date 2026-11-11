@@ -2,7 +2,6 @@ package provider
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"math"
 	"time"
@@ -10,10 +9,8 @@ import (
 	"github.com/hatedabamboo/orkeys/internal/openai"
 )
 
-// errOpenAIDisable: the Admin API has no disabled flag and no per-key limit. Delete is the only revoke.
-var errOpenAIDisable = errors.New("openai keys cannot be disabled or enabled; delete the key instead")
-
-var errOpenAILimit = errors.New("openai has no per-key limit")
+// openAIOptions are the options of openai. project is the project ID (proj_...). It has priority over workspace.
+var openAIOptions = []string{"project"}
 
 type openAI struct {
 	c      *openai.Client
@@ -21,8 +18,14 @@ type openAI struct {
 	now    func() time.Time
 }
 
+// The Admin API has no disabled flag and no per-key limit. So the adapter is not a Limiter or a Disabler.
+// Delete is the only revoke.
 func newOpenAI(c Config) *openAI {
-	return &openAI{c: openai.New(c.BaseURL, c.Key, c.Workspace, c.Timeout), selfID: c.SelfID, now: time.Now}
+	project := c.Options["project"]
+	if project == "" {
+		project = c.Workspace
+	}
+	return &openAI{c: openai.New(c.BaseURL, c.Key, project, c.Timeout), selfID: c.SelfID, now: time.Now}
 }
 
 func (o *openAI) Name() string   { return "openai" }
@@ -30,7 +33,7 @@ func (o *openAI) SelfID() string { return o.selfID }
 
 // OpenAI has no per-key limit. LimitReset is true because orkeys computes the spend per day, week and month from
 // the costs endpoint, so a budget of any period can be tracked in metrics.
-var openAICaps = Caps{NativeExpiry: true, LimitReset: true, LastUsed: true, Scopes: true, MaxExpiry: openai.MaxExpiry}
+var openAICaps = Caps{NativeExpiry: true, LimitReset: true, LastUsed: true, LastUsedExact: true, Scopes: true, MaxExpiry: openai.MaxExpiry}
 
 func (o *openAI) Caps() Caps { return openAICaps }
 
@@ -90,7 +93,9 @@ func (o *openAI) Create(ctx context.Context, s Spec) (Key, string, error) {
 		return Key{}, "", fmt.Errorf("create service account: %w", err)
 	}
 	undo := func(err error) (Key, string, error) {
-		if derr := o.c.DeleteServiceAccount(ctx, sa.ID); derr != nil {
+		dctx, cancel := detached(ctx)
+		defer cancel()
+		if derr := o.c.DeleteServiceAccount(dctx, sa.ID); derr != nil {
 			return Key{}, "", fmt.Errorf("%w; delete new service account %s also failed: %w", err, sa.ID, derr)
 		}
 		return Key{}, "", fmt.Errorf("%w (new service account deleted)", err)
@@ -111,12 +116,6 @@ func (o *openAI) Create(ctx context.Context, s Spec) (Key, string, error) {
 		ExpiresAt: unixPtr(k.ExpiresAt),
 	}, k.Value, nil
 }
-
-func (o *openAI) SetLimit(context.Context, string, *float64, string) error { return errOpenAILimit }
-
-func (o *openAI) Disable(context.Context, string) error { return errOpenAIDisable }
-
-func (o *openAI) Enable(context.Context, string) error { return errOpenAIDisable }
 
 // Delete deletes the key. It also deletes the owning service account when the account has no other keys, so an
 // imported key of a shared service account does not take the other keys with it.

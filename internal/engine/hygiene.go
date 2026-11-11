@@ -21,7 +21,10 @@ type Finding struct {
 }
 
 func (e *Engine) Hygiene(ctx context.Context, dryRun bool) ([]Finding, error) {
-	states, err := e.State.ListStates(ctx)
+	if err := e.ready(); err != nil {
+		return nil, err
+	}
+	states, err := e.listStates(ctx)
 	if err != nil {
 		return nil, err
 	}

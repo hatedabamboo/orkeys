@@ -30,12 +30,6 @@ func (p *Policy) Requested(kind, owner string) bool {
 	return owner != ""
 }
 
-const (
-	ConsumerESO    = "eso"
-	ConsumerDirect = "direct"
-	ConsumerGitHub = "github"
-)
-
 type Duration struct {
 	time.Duration
 }
@@ -68,6 +62,20 @@ type Policy struct {
 	// TrackDisabled makes plan enforce the disabled status of manifest keys both ways:
 	// it also enables keys that are disabled at the provider but not in the manifest.
 	TrackDisabled bool `yaml:"track_disabled"`
+	// MaxDeletes is the most keys that one apply revokes because their manifests are gone. Nil means
+	// DefaultMaxDeletes. apply --allow-deletes raises it for one run.
+	MaxDeletes *int `yaml:"max_deletes"`
+}
+
+// DefaultMaxDeletes is the max_deletes value when policy.yaml does not set it.
+const DefaultMaxDeletes = 3
+
+// DeleteLimit returns max_deletes, or DefaultMaxDeletes when it is not set.
+func (p *Policy) DeleteLimit() int {
+	if p.MaxDeletes == nil {
+		return DefaultMaxDeletes
+	}
+	return *p.MaxDeletes
 }
 
 type GitHubConfig struct {
@@ -108,7 +116,7 @@ func (t *Team) ChannelFor(kp *KindPolicy) string {
 // or a map from name to config, where the kind defaults to the name.
 type Providers map[string]ProviderConfig
 
-var providerFields = []string{"name", "kind", "management_key", "workspace", "base_url"}
+var providerFields = []string{"name", "kind", "management_key", "workspace", "base_url", "options"}
 
 func (ps *Providers) UnmarshalYAML(n *yaml.Node) error {
 	out := Providers{}
@@ -187,6 +195,9 @@ type ProviderConfig struct {
 	ManagementKey string `yaml:"management_key"`
 	Workspace     string `yaml:"workspace"`
 	BaseURL       string `yaml:"base_url"`
+	// Options are settings of one provider type, for example project for openai. The provider type lists
+	// the names it knows.
+	Options map[string]string `yaml:"options,omitempty"`
 }
 
 type ClusterConfig struct {
@@ -307,86 +318,6 @@ func (ss *Secrets) UnmarshalYAML(n *yaml.Node) error {
 		return nil
 	}
 	return fmt.Errorf("line %d: secret: want a mapping or a list", n.Line)
-}
-
-type Consumer struct {
-	Type           string   `yaml:"type"`
-	Cluster        string   `yaml:"cluster"`
-	Namespace      string   `yaml:"namespace"`
-	ExternalSecret string   `yaml:"externalsecret,omitempty"`
-	Restart        []string `yaml:"restart,omitempty"`
-
-	// GitHub Actions secret (type github): Repo or Org, optional Environment (repo only), secret Name.
-	Repo        string `yaml:"repo,omitempty"`
-	Org         string `yaml:"org,omitempty"`
-	Environment string `yaml:"environment,omitempty"`
-	Name        string `yaml:"name,omitempty"`
-	Visibility  string `yaml:"visibility,omitempty"`
-}
-
-// GitHubSecret is one GitHub Actions secret that orkeys writes. Set Org, or Repo (owner/name) with an
-// optional Environment.
-type GitHubSecret struct {
-	Org         string
-	Repo        string
-	Environment string
-	Name        string
-	Visibility  string
-}
-
-// ID is the stable name of the target, stored in the state: org:<org>:<NAME>, repo:<owner/repo>:<NAME>
-// or env:<owner/repo>:<environment>:<NAME>.
-func (g GitHubSecret) ID() string {
-	switch {
-	case g.Org != "":
-		return "org:" + g.Org + ":" + g.Name
-	case g.Environment != "":
-		return "env:" + g.Repo + ":" + g.Environment + ":" + g.Name
-	}
-	return "repo:" + g.Repo + ":" + g.Name
-}
-
-func (g GitHubSecret) String() string { return g.ID() }
-
-// ParseGitHubSecret reads an ID. The secret name is the last field; it cannot contain ':'.
-func ParseGitHubSecret(id string) (GitHubSecret, error) {
-	kind, rest, _ := strings.Cut(id, ":")
-	i := strings.LastIndex(rest, ":")
-	if i <= 0 || i == len(rest)-1 {
-		return GitHubSecret{}, fmt.Errorf("bad github secret id %q", id)
-	}
-	scope, name := rest[:i], rest[i+1:]
-	switch kind {
-	case "org":
-		return GitHubSecret{Org: scope, Name: name}, nil
-	case "repo":
-		return GitHubSecret{Repo: scope, Name: name}, nil
-	case "env":
-		repo, env, ok := strings.Cut(scope, ":")
-		if ok && repo != "" && env != "" {
-			return GitHubSecret{Repo: repo, Environment: env, Name: name}, nil
-		}
-	}
-	return GitHubSecret{}, fmt.Errorf("bad github secret id %q", id)
-}
-
-// GitHubSecrets returns the GitHub Actions secrets of the key's github consumers.
-func (k *Key) GitHubSecrets() []GitHubSecret {
-	var out []GitHubSecret
-	for _, c := range k.Consumers {
-		if c.Type != ConsumerGitHub {
-			continue
-		}
-		g := GitHubSecret{Repo: c.Repo, Environment: c.Environment, Name: c.Name}
-		if c.Org != "" {
-			g = GitHubSecret{Org: c.Org, Name: c.Name, Visibility: c.Visibility}
-			if g.Visibility == "" {
-				g.Visibility = "private"
-			}
-		}
-		out = append(out, g)
-	}
-	return out
 }
 
 func (p *Policy) NamePrefixFor(env, team string) string {

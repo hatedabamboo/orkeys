@@ -9,6 +9,7 @@ import (
 	"io"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -89,23 +90,35 @@ func (s *StateStore) GetState(ctx context.Context, name string) (*state.State, e
 	if err := json.Unmarshal(b, &st); err != nil {
 		return nil, fmt.Errorf("state %s: %w", name, err)
 	}
+	st.Rev = aws.ToString(out.ETag)
 	return &st, nil
 }
 
+// PutState writes with If-Match on the ETag in st.Rev, or with If-None-Match when st.Rev is empty (create only).
 func (s *StateStore) PutState(ctx context.Context, st *state.State) error {
 	b, err := json.MarshalIndent(st, "", "  ")
 	if err != nil {
 		return err
 	}
-	_, err = s.API.PutObject(ctx, &s3.PutObjectInput{
+	in := &s3.PutObjectInput{
 		Bucket:      &s.Bucket,
 		Key:         aws.String(s.key(st.Name)),
 		Body:        bytes.NewReader(b),
 		ContentType: aws.String("application/json"),
-	})
+	}
+	if st.Rev == "" {
+		in.IfNoneMatch = aws.String("*")
+	} else {
+		in.IfMatch = aws.String(st.Rev)
+	}
+	out, err := s.API.PutObject(ctx, in)
+	if conditionFailed(err) {
+		return fmt.Errorf("state %s: %w", st.Name, state.ErrConflict)
+	}
 	if err != nil {
 		return fmt.Errorf("s3 put %s: %w", s.key(st.Name), err)
 	}
+	st.Rev = aws.ToString(out.ETag)
 	return nil
 }
 
@@ -115,4 +128,59 @@ func (s *StateStore) DeleteState(ctx context.Context, name string) error {
 		return fmt.Errorf("s3 delete %s: %w", s.key(name), err)
 	}
 	return nil
+}
+
+// heartbeatName is the object with the heartbeats. ListStates skips names that start with ".".
+const heartbeatName = ".heartbeat"
+
+// PutHeartbeat records t as the last success of operation. It runs under the state lock.
+// So a read and an unconditional write are safe.
+func (s *StateStore) PutHeartbeat(ctx context.Context, operation string, t time.Time) error {
+	beats, err := s.readHeartbeats(ctx)
+	if err != nil {
+		return err
+	}
+	beats[operation] = t.UTC().Format(time.RFC3339)
+	b, err := json.Marshal(beats)
+	if err != nil {
+		return err
+	}
+	_, err = s.API.PutObject(ctx, &s3.PutObjectInput{Bucket: &s.Bucket, Key: aws.String(s.key(heartbeatName)),
+		Body: bytes.NewReader(b), ContentType: aws.String("application/json")})
+	if err != nil {
+		return fmt.Errorf("s3 put %s: %w", s.key(heartbeatName), err)
+	}
+	return nil
+}
+
+// Heartbeats returns the last success of each operation.
+func (s *StateStore) Heartbeats(ctx context.Context) (map[string]time.Time, error) {
+	beats, err := s.readHeartbeats(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]time.Time{}
+	for op, v := range beats {
+		if t, err := time.Parse(time.RFC3339, v); err == nil {
+			out[op] = t
+		}
+	}
+	return out, nil
+}
+
+func (s *StateStore) readHeartbeats(ctx context.Context) (map[string]string, error) {
+	out, err := s.API.GetObject(ctx, &s3.GetObjectInput{Bucket: &s.Bucket, Key: aws.String(s.key(heartbeatName))})
+	var nsk *types.NoSuchKey
+	if errors.As(err, &nsk) {
+		return map[string]string{}, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("s3 get %s: %w", s.key(heartbeatName), err)
+	}
+	defer func() { _ = out.Body.Close() }()
+	beats := map[string]string{}
+	if err := json.NewDecoder(out.Body).Decode(&beats); err != nil {
+		return nil, fmt.Errorf("s3 %s: %w", s.key(heartbeatName), err)
+	}
+	return beats, nil
 }

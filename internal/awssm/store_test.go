@@ -3,6 +3,7 @@ package awssm
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/secretsmanager"
@@ -16,11 +17,39 @@ type fakeSM struct {
 }
 
 func (f *fakeSM) GetSecretValue(_ context.Context, in *secretsmanager.GetSecretValueInput, _ ...func(*secretsmanager.Options)) (*secretsmanager.GetSecretValueOutput, error) {
+	if _, ok := f.deleted[aws.ToString(in.SecretId)]; ok {
+		return nil, &types.InvalidRequestException{Message: aws.String("secret was marked for deletion")}
+	}
 	v, ok := f.values[aws.ToString(in.SecretId)]
 	if !ok {
 		return nil, &types.ResourceNotFoundException{}
 	}
 	return &secretsmanager.GetSecretValueOutput{SecretString: aws.String(v)}, nil
+}
+
+func (f *fakeSM) DescribeSecret(_ context.Context, in *secretsmanager.DescribeSecretInput, _ ...func(*secretsmanager.Options)) (*secretsmanager.DescribeSecretOutput, error) {
+	name := aws.ToString(in.SecretId)
+	out := &secretsmanager.DescribeSecretOutput{Name: &name}
+	if _, ok := f.deleted[name]; ok {
+		out.DeletedDate = aws.Time(time.Now())
+		return out, nil
+	}
+	if _, ok := f.values[name]; !ok {
+		return nil, &types.ResourceNotFoundException{}
+	}
+	for k, v := range f.tags[name] {
+		out.Tags = append(out.Tags, types.Tag{Key: aws.String(k), Value: aws.String(v)})
+	}
+	return out, nil
+}
+
+func (f *fakeSM) RestoreSecret(_ context.Context, in *secretsmanager.RestoreSecretInput, _ ...func(*secretsmanager.Options)) (*secretsmanager.RestoreSecretOutput, error) {
+	name := aws.ToString(in.SecretId)
+	if _, ok := f.deleted[name]; !ok {
+		return nil, &types.InvalidRequestException{Message: aws.String("not scheduled for deletion")}
+	}
+	delete(f.deleted, name)
+	return &secretsmanager.RestoreSecretOutput{}, nil
 }
 
 func (f *fakeSM) CreateSecret(_ context.Context, in *secretsmanager.CreateSecretInput, _ ...func(*secretsmanager.Options)) (*secretsmanager.CreateSecretOutput, error) {
@@ -53,7 +82,7 @@ func (f *fakeSM) DeleteSecret(_ context.Context, in *secretsmanager.DeleteSecret
 	if _, ok := f.values[name]; !ok {
 		return nil, &types.ResourceNotFoundException{}
 	}
-	delete(f.values, name)
+	// AWS keeps the value and the tags until the recovery window ends.
 	f.deleted[name] = aws.ToInt64(in.RecoveryWindowInDays)
 	return &secretsmanager.DeleteSecretOutput{}, nil
 }
@@ -94,5 +123,30 @@ func TestSecretStore(t *testing.T) {
 	f.values["bad"] = "not json"
 	if _, err := s.Read(ctx, "bad"); err == nil {
 		t.Fatal("want error for non-JSON value")
+	}
+}
+
+func TestPutRestoresSecretScheduledForDeletion(t *testing.T) {
+	f := &fakeSM{values: map[string]string{"app/x": `{"api_key":"old"}`}, tags: map[string]map[string]string{}, deleted: map[string]int64{}}
+	s := &SecretStore{API: f, RecoveryWindow: 7}
+	ctx := context.Background()
+
+	if err := s.DeleteField(ctx, "app/x", "api_key"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Read(ctx, "app/x"); err == nil {
+		t.Fatal("a secret scheduled for deletion must read as not found")
+	}
+	if m, err := s.Meta(ctx, "app/x"); err != nil || m != nil {
+		t.Fatalf("meta of a deleted secret: %v %v", m, err)
+	}
+	if err := s.Put(ctx, "app/x", "token", "new", map[string]string{"orkeys-key-id": "k2"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, pending := f.deleted["app/x"]; pending || f.values["app/x"] != `{"token":"new"}` {
+		t.Fatalf("restore: deleted %v value %s", f.deleted, f.values["app/x"])
+	}
+	if m, _ := s.Meta(ctx, "app/x"); m["orkeys-key-id"] != "k2" {
+		t.Fatalf("meta %v", m)
 	}
 }

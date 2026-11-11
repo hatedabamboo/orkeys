@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/hatedabamboo/orkeys/internal/manifest"
@@ -57,14 +58,20 @@ func (f *fakeProvider) Disable(_ context.Context, id string) error {
 	return nil
 }
 
-func (f *fakeProvider) Enable(_ context.Context, id string) error {
+func (f *fakeProvider) Enable(_ context.Context, id string, l *float64, r string) error {
 	if k := f.find(id); k != nil {
 		k.Disabled = false
+		if l != nil {
+			k.LimitUSD, k.LimitReset = l, r
+		}
 	}
 	return nil
 }
 
-func (f *fakeProvider) Delete(_ context.Context, id string) error {
+func (f *fakeProvider) Delete(ctx context.Context, id string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	for i := range f.keys {
 		if f.keys[i].ID == id {
 			f.keys = append(f.keys[:i], f.keys[i+1:]...)
@@ -77,13 +84,23 @@ func (f *fakeProvider) Delete(_ context.Context, id string) error {
 type fakeStore struct {
 	states       map[string]state.State
 	secrets      map[string]string
+	meta         map[string]map[string]string // path -> metadata
 	failPutState int
 	failSecret   error
 	failPath     string // Put to this path fails
+	beforePut    func() // runs at the start of each secret Put
+	// onPutState runs before each state write. A non-nil error fails the write.
+	onPutState func(*state.State) error
+	rev        int
 }
 
+func (s *fakeStore) Acquire(context.Context, state.LockInfo) error    { return nil }
+func (s *fakeStore) Renew(context.Context, state.LockInfo) error      { return nil }
+func (s *fakeStore) Release(context.Context, string) error            { return nil }
+func (s *fakeStore) Current(context.Context) (*state.LockInfo, error) { return nil, nil }
+
 func newStore() *fakeStore {
-	return &fakeStore{states: map[string]state.State{}, secrets: map[string]string{}}
+	return &fakeStore{states: map[string]state.State{}, secrets: map[string]string{}, meta: map[string]map[string]string{}}
 }
 
 func (s *fakeStore) ListStates(context.Context) ([]*state.State, error) {
@@ -109,11 +126,24 @@ func (s *fakeStore) GetState(_ context.Context, n string) (*state.State, error) 
 	return &st, nil
 }
 
-func (s *fakeStore) PutState(_ context.Context, st *state.State) error {
+func (s *fakeStore) PutState(ctx context.Context, st *state.State) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if s.failPutState > 0 {
 		s.failPutState--
 		return errors.New("state store down")
 	}
+	if s.onPutState != nil {
+		if err := s.onPutState(st); err != nil {
+			return err
+		}
+	}
+	if cur, ok := s.states[st.Name]; ok != (st.Rev != "") || (ok && cur.Rev != st.Rev) {
+		return fmt.Errorf("state %s: %w", st.Name, state.ErrConflict)
+	}
+	s.rev++
+	st.Rev = fmt.Sprint(s.rev)
 	c := *st
 	c.PendingRevokes = append([]state.PendingRevoke(nil), st.PendingRevokes...)
 	s.states[st.Name] = c
@@ -125,7 +155,13 @@ func (s *fakeStore) DeleteState(_ context.Context, n string) error {
 	return nil
 }
 
-func (s *fakeStore) Put(_ context.Context, path, field, value string, _ map[string]string) error {
+func (s *fakeStore) Put(ctx context.Context, path, field, value string, meta map[string]string) error {
+	if s.beforePut != nil {
+		s.beforePut()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if s.failSecret != nil {
 		return s.failSecret
 	}
@@ -133,25 +169,43 @@ func (s *fakeStore) Put(_ context.Context, path, field, value string, _ map[stri
 		return errors.New("secret store down for " + path)
 	}
 	s.secrets[path+"#"+field] = value
+	if meta != nil {
+		s.meta[path] = meta
+	}
 	return nil
+}
+
+func (s *fakeStore) Meta(_ context.Context, path string) (map[string]string, error) {
+	return s.meta[path], nil
 }
 
 func (s *fakeStore) DeleteField(_ context.Context, path, field string) error {
 	delete(s.secrets, path+"#"+field)
+	for k := range s.secrets {
+		if strings.HasPrefix(k, path+"#") {
+			return nil
+		}
+	}
+	delete(s.meta, path)
 	return nil
 }
 
 type fakeKube struct {
+	mu    sync.Mutex
 	calls []string
 	fail  error
 }
 
 func (k *fakeKube) ForceSync(_ context.Context, c, ns, n string) error {
+	k.mu.Lock()
+	defer k.mu.Unlock()
 	k.calls = append(k.calls, "sync "+c+"/"+ns+"/"+n)
 	return k.fail
 }
 
 func (k *fakeKube) Restart(_ context.Context, c, ns, t string) error {
+	k.mu.Lock()
+	defer k.mu.Unlock()
 	k.calls = append(k.calls, "restart "+c+"/"+ns+"/"+t)
 	return k.fail
 }

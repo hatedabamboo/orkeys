@@ -23,13 +23,15 @@ orkeys manages LLM provider API keys (OpenRouter, DeepInfra, OpenAI). It has two
 | Path | Contents |
 |---|---|
 | `main.go` | Entry point. Sets `main.version` from ldflags |
-| `internal/cli` | Cobra commands: `openrouter.go`, `deepinfra.go`, `openai.go`, `inventory.go`, `exporter_cmd.go`. Wiring in `wire.go`, output in `render.go` and `output.go` |
-| `internal/engine` | Inventory logic: `plan.go`, `apply.go`, `rotate.go`, `request.go`, `revoke.go`, `tracked.go`, `hygiene.go`, `import.go`, `teams.go`, `github.go`, `event.go`. Test fakes in `fakes_test.go` |
-| `internal/manifest` | Load and validate `policy.yaml`, `team.yaml` and key manifests. Types in `types.go`. Test repo in `testdata/repo` |
-| `internal/provider` | Common provider interface and registry; OpenRouter, DeepInfra and OpenAI adapters |
+| `internal/cli` | Cobra commands: `openrouter.go`, `deepinfra.go`, `openai.go`, `keys.go` (any provider), `inventory.go`, `exporter_cmd.go`. Wiring in `wire.go`, output in `render.go` and `output.go`, event webhook in `webhook.go` |
+| `internal/engine` | Inventory logic: `plan.go`, `apply.go`, `rotate.go`, `request.go`, `revoke.go`, `tracked.go`, `hygiene.go`, `import.go`, `teams.go`, `consumers.go` (consumer drivers), `recover.go` (interrupted issues, secret drift), `event.go`. Test fakes in `fakes_test.go` |
+| `internal/manifest` | Load and validate `policy.yaml`, `team.yaml` and key manifests. Types in `types.go`, consumer types in `consumer.go`. Test repo in `testdata/repo` |
+| `internal/provider` | Common provider interface, optional `Limiter` and `Disabler`, and registry; OpenRouter, DeepInfra and OpenAI adapters. Contract tests in `conformance_test.go` |
+| `internal/provider/providertest` | Contract test that every provider adapter passes |
+| `internal/nullable` | Request fields that are absent, null or set |
 | `internal/openrouter`, `internal/deepinfra`, `internal/openai` | HTTP clients for the provider APIs |
-| `internal/httpx` | JSON over HTTP, retries GET on 429 and 5xx |
-| `internal/state`, `internal/secrets` | State store and secrets store interfaces; state lock |
+| `internal/httpx` | JSON over HTTP, retries GET on 429 and 5xx. All provider clients use it |
+| `internal/state`, `internal/secrets` | State store and secrets store interfaces; state lock, schema version, heartbeats |
 | `internal/vault`, `internal/s3store`, `internal/awssm`, `internal/backend` | Vault KV v2, S3, AWS Secrets Manager, and the factory that picks one |
 | `internal/kube` | `kubectl` calls: ExternalSecret force-sync, rollout restart |
 | `internal/github` | Org and team membership, Actions secrets |
@@ -48,6 +50,7 @@ If you add a package or move code, update this table and the Layout table in `RE
 make            # build ./orkeys
 make check      # gofmt check, go vet, go test ./...
 make lint       # golangci-lint
+make vuln       # govulncheck
 ```
 
 Run `make check` and `make lint` before you say that a change is done. If a check fails, report the output.
@@ -170,12 +173,12 @@ Tell the user what `apply` will do before they merge. These changes have effects
 | Change | Effect at `apply` or `rotate` |
 |---|---|
 | New file | Creates a new key and writes it to `secret` |
-| Delete the file | Revokes the key at the provider and removes its secret fields and GitHub secrets |
+| Delete the file | Revokes the key at the provider and removes its secret fields and GitHub secrets. `apply` refuses more than `max_deletes` (default 3) revokes in one run |
 | Rename the file and `name` | Revokes the old key and creates a new one. Consumers get a new key |
 | Change `secret` (add, remove or change a place) | Reissues the key and writes it to all places |
 | Change `provider` or `kind` of a key with state | `plan` shows "provider or kind changed". Make a new manifest with a new name instead |
 | Change `budget` | Sets the new limit at the provider. No new key |
-| Add a `github` consumer | Writes the key to the GitHub secret (`sync-github`) |
+| Add a `github` consumer | Writes the key to the GitHub secret (`sync-consumers`) |
 | `disabled: true` | Disables the key at the provider and stops rotation. Keeps state and secret. Prefer this to deleting the file when the user may need the key again |
 | `import: {id, name}` | Adopts an existing provider key. The user must first write its value to `secret.path` |
 

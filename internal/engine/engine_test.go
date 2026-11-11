@@ -44,8 +44,8 @@ func setup(t *testing.T) *env {
 		t.Fatal(err)
 	}
 	v := &env{
-		or:     &fakeProvider{name: "openrouter", caps: provider.Caps{NativeExpiry: true, PerKeyLimit: true, LimitReset: true, LastUsed: true}},
-		di:     &fakeProvider{name: "deepinfra", caps: provider.Caps{PerKeyLimit: true, Scopes: true}},
+		or:     &fakeProvider{name: "openrouter", caps: provider.Caps{NativeExpiry: true, PerKeyLimit: true, LimitReset: true, LastUsed: true, Disable: true}},
+		di:     &fakeProvider{name: "deepinfra", caps: provider.Caps{PerKeyLimit: true, Scopes: true, Disable: true}},
 		store:  newStore(),
 		kube:   &fakeKube{},
 		events: &EventLog{},
@@ -55,7 +55,11 @@ func setup(t *testing.T) *env {
 	}
 	v.e = &Engine{
 		Providers: provider.Set{"openrouter": v.or, "deepinfra": v.di},
-		State:     v.store, Secrets: v.store, Kube: v.kube, Events: v.events, Deliverer: v.dlv,
+		State:     v.store, Secrets: v.store, Events: v.events, Deliverer: v.dlv,
+		Notifiers: map[string]Notifier{
+			manifest.ConsumerESO:    KubeNotifier{Kube: v.kube},
+			manifest.ConsumerDirect: KubeNotifier{Kube: v.kube},
+		},
 		Org: &fakeOrg{members: map[string]bool{"jdoe": true, "asmith": true}},
 		Now: v.clk.now, Log: &strings.Builder{}, RetryDelay: time.Microsecond,
 	}
@@ -86,7 +90,7 @@ func (v *env) plan(t *testing.T) *Plan {
 
 func (v *env) apply(t *testing.T) {
 	t.Helper()
-	if err := v.e.Apply(context.Background(), v.plan(t)); err != nil {
+	if err := v.e.Apply(context.Background(), v.plan(t), ApplyOptions{}); err != nil {
 		t.Fatal(err)
 	}
 }

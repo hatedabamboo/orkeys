@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sync"
 	"time"
 )
 
@@ -37,12 +38,16 @@ type Locker interface {
 	Current(ctx context.Context) (*LockInfo, error)
 }
 
+// Lease is a held lock. A goroutine renews it until Release.
 type Lease struct {
 	l      Locker
 	info   LockInfo
 	cancel context.CancelFunc
 	done   chan struct{}
 	lost   chan struct{}
+
+	mu  sync.Mutex
+	err error
 }
 
 func NewLockID() string {
@@ -91,24 +96,58 @@ func Lock(ctx context.Context, l Locker, holder, operation string, ttl, wait tim
 	}
 }
 
+// ID returns the lock ID.
 func (le *Lease) ID() string { return le.info.ID }
 
+// Lost is closed when the lease is lost. Err then tells why.
 func (le *Lease) Lost() <-chan struct{} { return le.lost }
 
+// Err returns nil while the lease is held, and the reason after it is lost.
+func (le *Lease) Err() error {
+	le.mu.Lock()
+	defer le.mu.Unlock()
+	return le.err
+}
+
+func (le *Lease) fail(err error) {
+	le.mu.Lock()
+	le.err = err
+	le.mu.Unlock()
+	close(le.lost)
+}
+
+// renew extends the lease every ttl/3. After a failed renewal, it tries again every ttl/15.
+// Another process can take an expired lock. So when no renewal works until ttl/6 before the expiry,
+// the lease counts as lost, and this process stops before the expiry.
 func (le *Lease) renew(ctx context.Context, ttl time.Duration) {
 	defer close(le.done)
-	t := time.NewTicker(ttl / 3)
+	every, retry, margin := ttl/3, ttl/15, ttl/6
+	expires := le.info.Expires
+	t := time.NewTimer(every)
 	defer t.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			le.info.Expires = time.Now().UTC().Add(ttl)
-			if err := le.l.Renew(ctx, le.info); errors.Is(err, ErrLockLost) {
-				close(le.lost)
-				return
-			}
+		}
+		next := le.info
+		next.Expires = time.Now().UTC().Add(ttl)
+		err := le.l.Renew(ctx, next)
+		switch {
+		case err == nil:
+			le.info, expires = next, next.Expires
+			t.Reset(every)
+		case errors.Is(err, ErrLockLost):
+			le.fail(err)
+			return
+		case ctx.Err() != nil:
+			return
+		case !time.Now().Before(expires.Add(-margin)):
+			le.fail(fmt.Errorf("%w: renewal failed until the lock expires at %s: %w", ErrLockLost, expires.Format(time.RFC3339), err))
+			return
+		default:
+			t.Reset(retry)
 		}
 	}
 }

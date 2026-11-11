@@ -9,35 +9,35 @@ import (
 	"strings"
 	"time"
 
-	"github.com/hatedabamboo/orkeys/internal/openrouter"
+	"github.com/hatedabamboo/orkeys/internal/nullable"
 )
 
 // LimitResets are the values the API accepts for limit_reset, plus "none" for null.
 var LimitResets = []string{"none", "daily", "weekly", "monthly"}
 
 // ParseLimit parses a USD limit. "", "none", "null" and "unlimited" mean null.
-func ParseLimit(s string) (openrouter.Nullable[float64], error) {
+func ParseLimit(s string) (nullable.Value[float64], error) {
 	s = strings.TrimPrefix(strings.TrimSpace(s), "$")
 	switch strings.ToLower(s) {
 	case "", "none", "null", "unlimited":
-		return openrouter.Null[float64](), nil
+		return nullable.Null[float64](), nil
 	}
 	v, err := strconv.ParseFloat(s, 64)
 	if err != nil || math.IsNaN(v) || v < 0 || v >= 1_000_000 {
-		return openrouter.Nullable[float64]{}, fmt.Errorf("invalid limit %q: want a number in [0, 1000000) or \"none\"", s)
+		return nullable.Value[float64]{}, fmt.Errorf("invalid limit %q: want a number in [0, 1000000) or \"none\"", s)
 	}
-	return openrouter.Value(v), nil
+	return nullable.Of(v), nil
 }
 
 // ParseLimitReset parses daily|weekly|monthly. "", "none" and "null" mean null.
-func ParseLimitReset(s string) (openrouter.Nullable[string], error) {
+func ParseLimitReset(s string) (nullable.Value[string], error) {
 	switch v := strings.ToLower(strings.TrimSpace(s)); v {
 	case "", "none", "null", "never":
-		return openrouter.Null[string](), nil
+		return nullable.Null[string](), nil
 	case "daily", "weekly", "monthly":
-		return openrouter.Value(v), nil
+		return nullable.Of(v), nil
 	default:
-		return openrouter.Nullable[string]{}, fmt.Errorf("invalid limit reset %q: want daily|weekly|monthly|none", s)
+		return nullable.Value[string]{}, fmt.Errorf("invalid limit reset %q: want daily|weekly|monthly|none", s)
 	}
 }
 
@@ -167,31 +167,6 @@ func YesNo(b bool) string {
 		return "yes"
 	}
 	return "no"
-}
-
-// Fields lists the fields of a key as label/value pairs for display.
-func Fields(k openrouter.Key) [][2]string {
-	return [][2]string{
-		{"Name", k.Name},
-		{"Label", k.Label},
-		{"Hash", k.Hash},
-		{"Status", k.Status()},
-		{"Limit", USDPtr(k.Limit)},
-		{"Limit remaining", USDPtr(k.LimitRemaining)},
-		{"Limit reset", Str(k.LimitReset)},
-		{"BYOK in limit", YesNo(k.IncludeBYOKInLimit)},
-		{"Usage (total)", USD(k.Usage)},
-		{"Usage (day/week/month)", fmt.Sprintf("%s / %s / %s", USD(k.UsageDaily), USD(k.UsageWeekly), USD(k.UsageMonthly))},
-		{"BYOK usage (total)", USD(k.BYOKUsage)},
-		{"BYOK usage (day/week/month)", fmt.Sprintf("%s / %s / %s", USD(k.BYOKUsageDaily), USD(k.BYOKUsageWeekly), USD(k.BYOKUsageMonthly))},
-		{"Expires", Time(k.ExpiresAt)},
-		{"Last used", Time(k.LastUsedAt)},
-		{"Created", Time(&k.CreatedAt)},
-		{"Updated", Time(k.UpdatedAt)},
-		{"Workspace", Str(&k.WorkspaceID)},
-		{"Creator user", Str(k.CreatorUserID)},
-		{"External user", Str(k.ExternalUser)},
-	}
 }
 
 func ParseDuration(s string) (time.Duration, error) {

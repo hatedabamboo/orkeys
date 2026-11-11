@@ -2,6 +2,8 @@ package engine
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"math"
 	"slices"
@@ -25,7 +27,10 @@ const (
 	ActDisable     ActionType = "disable"
 	ActEnable      ActionType = "enable"
 	ActDelete      ActionType = "delete"
-	ActSyncGitHub  ActionType = "sync-github"
+	// ActSyncConsumers writes the key to new push consumers and deletes removed ones.
+	ActSyncConsumers ActionType = "sync-consumers"
+	// ActResume finishes an interrupted key issue.
+	ActResume ActionType = "resume"
 )
 
 type Action struct {
@@ -45,22 +50,87 @@ type ForeignKey struct {
 	Name     string `json:"name"`
 }
 
+// Plan is the list of changes that apply makes.
 type Plan struct {
 	Actions   []Action     `json:"actions"`
 	Unmanaged []ForeignKey `json:"unmanaged"`
 	Warnings  []string     `json:"warnings"`
+	// Fingerprint identifies the actions. apply --plan compares it with a new plan.
+	// Then apply does only what the reviewer saw.
+	Fingerprint string `json:"fingerprint"`
+}
+
+// fingerprint hashes the type, key and detail of each action. Unmanaged keys and warnings do not count.
+func (p *Plan) fingerprint() string {
+	lines := make([]string, len(p.Actions))
+	for i, a := range p.Actions {
+		lines[i] = string(a.Type) + "\x00" + a.Name + "\x00" + a.Detail
+	}
+	slices.Sort(lines)
+	sum := sha256.Sum256([]byte(strings.Join(lines, "\n")))
+	return hex.EncodeToString(sum[:])
+}
+
+// Matches returns nil when cur has the same actions as p, else an error that names the differences.
+func (p *Plan) Matches(cur *Plan) error {
+	if p.Fingerprint != "" && p.Fingerprint == cur.Fingerprint {
+		return nil
+	}
+	key := func(a Action) string { return string(a.Type) + " " + a.Name + ": " + a.Detail }
+	saved, now := map[string]bool{}, map[string]bool{}
+	for _, a := range p.Actions {
+		saved[key(a)] = true
+	}
+	for _, a := range cur.Actions {
+		now[key(a)] = true
+	}
+	var d []string
+	for _, a := range cur.Actions {
+		if !saved[key(a)] {
+			d = append(d, "+ "+key(a))
+		}
+	}
+	for _, a := range p.Actions {
+		if !now[key(a)] {
+			d = append(d, "- "+key(a))
+		}
+	}
+	if len(d) == 0 {
+		return nil
+	}
+	return fmt.Errorf("the plan changed since it was saved; run plan again and review it:\n  %s", strings.Join(d, "\n  "))
 }
 
 func (p *Plan) Empty() bool { return len(p.Actions) == 0 }
 
+// Deletes returns the number of delete actions. Each one revokes a key with no manifest.
+func (p *Plan) Deletes() int {
+	n := 0
+	for _, a := range p.Actions {
+		if a.Type == ActDelete {
+			n++
+		}
+	}
+	return n
+}
+
+// Plan compares the inventory with the state and the providers and returns the changes. It changes nothing.
 func (e *Engine) Plan(ctx context.Context) (*Plan, error) {
-	states, err := e.State.ListStates(ctx)
+	p, _, err := e.plan(ctx)
+	return p, err
+}
+
+func (e *Engine) plan(ctx context.Context) (*Plan, map[string][]provider.Key, error) {
+	if err := e.ready(); err != nil {
+		return nil, nil, err
+	}
+	states, err := e.listStates(ctx)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	lists, err := e.listAll(ctx)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	byName := map[string]*state.State{}
 	known := map[string]string{}
@@ -84,7 +154,7 @@ func (e *Engine) Plan(ctx context.Context) (*Plan, error) {
 	for _, k := range e.Inv.Keys {
 		p, err := e.Providers.Get(k.Provider)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		st := byName[k.Name]
 		act := Action{Name: k.Name, Team: k.Team, Provider: k.Provider, Key: k, State: st}
@@ -115,6 +185,11 @@ func (e *Engine) Plan(ctx context.Context) (*Plan, error) {
 			plan.Warnings = append(plan.Warnings, fmt.Sprintf("%s: provider or kind changed; add a key with a new name instead", k.Name))
 			continue
 		}
+		if st.Phase == state.PhaseIssuing {
+			act.Type, act.Detail = ActResume, "an earlier run stopped while it wrote key "+short(st.KeyID)+" to the secrets"
+			plan.Actions = append(plan.Actions, act)
+			continue
+		}
 		want := e.stateFor(k)
 		if !state.SameSecrets(want.Secrets, st.Secrets) {
 			act.Type, act.Detail = ActReissue, fmt.Sprintf("secret moved %s -> %s", secretList(st.Secrets), secretList(want.Secrets))
@@ -124,6 +199,15 @@ func (e *Engine) Plan(ctx context.Context) (*Plan, error) {
 		cur := provider.Find(lists[k.Provider], st.KeyID)
 		if cur == nil {
 			act.Type, act.Detail = ActRecreate, "key "+short(st.KeyID)+" is missing at the provider"
+			plan.Actions = append(plan.Actions, act)
+			continue
+		}
+		drift, err := e.secretDrift(ctx, st)
+		if err != nil {
+			return nil, nil, err
+		}
+		if drift != "" {
+			act.Type, act.Detail = ActReissue, drift
 			plan.Actions = append(plan.Actions, act)
 			continue
 		}
@@ -156,10 +240,10 @@ func (e *Engine) Plan(ctx context.Context) (*Plan, error) {
 			a.Type, a.Detail = ActUpdateState, d
 			plan.Actions = append(plan.Actions, a)
 		}
-		// During a rotation, rotate writes the GitHub secrets.
-		if push, drop := githubDiff(k, st); st.Rotation == state.RotationIdle && len(push)+len(drop) > 0 {
+		// During a rotation, rotate writes the push consumers.
+		if push, drop := pushDiff(k, st); st.Rotation == state.RotationIdle && len(push)+len(drop) > 0 {
 			a := act
-			a.Type, a.Detail = ActSyncGitHub, githubDetail(push, drop)
+			a.Type, a.Detail = ActSyncConsumers, pushDetail(push, drop)
 			plan.Actions = append(plan.Actions, a)
 		}
 	}
@@ -194,7 +278,12 @@ func (e *Engine) Plan(ctx context.Context) (*Plan, error) {
 		}
 	}
 	sortForeign(plan.Unmanaged)
-	return plan, nil
+	plan.Fingerprint = plan.fingerprint()
+	if n, limit := plan.Deletes(), e.Inv.Policy.DeleteLimit(); n > limit {
+		plan.Warnings = append(plan.Warnings, fmt.Sprintf(
+			"%d keys to revoke, more than max_deletes %d; apply refuses this plan without --allow-deletes %d", n, limit, n))
+	}
+	return plan, lists, nil
 }
 
 func metaDiff(cur, want *state.State) string {

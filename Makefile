@@ -5,11 +5,13 @@ VERSION  ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev
 LDFLAGS  := -s -w -X main.version=$(VERSION)
 GOFLAGS  := -trimpath
 GOLANGCI_VERSION   ?= v2.4.0
+GOVULNCHECK_VERSION ?= v1.1.4
+GOTEST_FLAGS ?=
 GORELEASER_VERSION ?= v2.12.0
 PLATFORMS := darwin/amd64 darwin/arm64 linux/amd64 linux/arm64 windows/amd64
 
 .DEFAULT_GOAL := build
-.PHONY: build install test vet fmt fmt-check check lint tidy release snapshot clean help bump-patch bump-minor bump-major
+.PHONY: build install test vet fmt fmt-check check lint vuln tidy release snapshot clean help bump-patch bump-minor bump-major
 
 build:
 	go build $(GOFLAGS) -ldflags "$(LDFLAGS)" -o $(BINARY) $(PKG)
@@ -18,7 +20,7 @@ install:
 	go install $(GOFLAGS) -ldflags "$(LDFLAGS)" $(PKG)
 
 test:
-	go test ./...
+	go test $(GOTEST_FLAGS) ./...
 
 vet:
 	go vet ./...
@@ -33,6 +35,9 @@ check: fmt-check vet test
 
 lint:
 	go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_VERSION) run
+
+vuln:
+	go run golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) ./...
 
 tidy:
 	go mod tidy

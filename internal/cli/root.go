@@ -21,6 +21,10 @@ const (
 	EnvKey       = "OPENROUTER_MANAGEMENT_API_KEY"
 	EnvBase      = "OPENROUTER_API_BASE"
 	EnvWorkspace = "OPENROUTER_WORKSPACE_ID"
+	// EnvEventsFile is the default of --events-file.
+	EnvEventsFile = "ORKEYS_EVENTS_FILE"
+	// EnvEventsWebhook is the default of --events-webhook. The URL often holds a token. orkeys does not log it.
+	EnvEventsWebhook = "ORKEYS_EVENTS_WEBHOOK"
 )
 
 type app struct {
@@ -36,6 +40,10 @@ type app struct {
 	oaBaseURL string
 	oaProject string
 	events    *eventPrinter
+
+	eventsFile    string
+	eventsWebhook string
+	logFormat     string
 }
 
 // Execute runs the CLI and returns the process exit code.
@@ -61,6 +69,7 @@ Provider commands manage keys directly:
   orkeys openrouter (or) ...   OpenRouter keys
   orkeys deepinfra (di) ...    DeepInfra API tokens
   orkeys openai (oa) ...       OpenAI project API keys
+  orkeys keys -p <provider>    keys of any provider in policy.yaml, with the common commands
 
 Inventory commands (validate, plan, apply, rotate, request, issued, import, hygiene, unlock, exporter)
 manage keys of all providers from an inventory repository, with state and secrets in Vault or AWS.
@@ -85,6 +94,9 @@ Environment for inventory commands:
 				}
 				a.output = "json"
 			}
+			if a.logFormat != "text" && a.logFormat != "json" {
+				return fmt.Errorf("invalid --log-format %q: want text|json", a.logFormat)
+			}
 			switch a.output {
 			case "table", "wide", "json":
 				return nil
@@ -99,8 +111,11 @@ Environment for inventory commands:
 	pf.BoolVar(&a.json, "json", false, "shorthand for --output json")
 	pf.StringVar(&a.repo, "repo", envOr(EnvRepo, "."), "path to the inventory repository (env "+EnvRepo+")")
 	pf.DurationVar(&a.lockWait, "lock-wait", 5*time.Minute, "how long to wait for the state lock")
+	pf.StringVar(&a.eventsFile, "events-file", os.Getenv(EnvEventsFile), "append each event to this file as one JSON line (env "+EnvEventsFile+")")
+	pf.StringVar(&a.eventsWebhook, "events-webhook", os.Getenv(EnvEventsWebhook), "POST each event as JSON to this URL (env "+EnvEventsWebhook+")")
+	pf.StringVar(&a.logFormat, "log-format", "text", "log format of inventory commands on stderr: text|json")
 
-	root.AddCommand(a.openrouterCmd(), a.deepinfraCmd(), a.openaiCmd())
+	root.AddCommand(a.openrouterCmd(), a.deepinfraCmd(), a.openaiCmd(), a.keysCmd())
 	root.AddCommand(a.inventoryCmds()...)
 	return root
 }

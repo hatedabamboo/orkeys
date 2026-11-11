@@ -57,7 +57,7 @@ func (f *fakeS3) PutObject(_ context.Context, in *s3.PutObjectInput, _ ...func(*
 		f.etags = map[string]int{}
 	}
 	f.etags[k]++
-	return &s3.PutObjectOutput{}, nil
+	return &s3.PutObjectOutput{ETag: aws.String(f.etag(k))}, nil
 }
 
 func (f *fakeS3) DeleteObject(_ context.Context, in *s3.DeleteObjectInput, _ ...func(*s3.Options)) (*s3.DeleteObjectOutput, error) {
@@ -150,5 +150,48 @@ func TestStateStore(t *testing.T) {
 	}
 	if all, _ := s.ListStates(ctx); len(all) != 1 {
 		t.Fatal("delete")
+	}
+}
+
+func TestStateConflicts(t *testing.T) {
+	s := &StateStore{API: &fakeS3{objects: map[string][]byte{}}, Bucket: "b", Prefix: "st"}
+	ctx := context.Background()
+	st := &state.State{Name: "prod-a-b", KeyID: "k1"}
+	if err := s.PutState(ctx, st); err != nil || st.Rev == "" {
+		t.Fatalf("create: %v rev %q", err, st.Rev)
+	}
+	if err := s.PutState(ctx, &state.State{Name: "prod-a-b", KeyID: "k2"}); !errors.Is(err, state.ErrConflict) {
+		t.Fatalf("second create must conflict: %v", err)
+	}
+	read, _ := s.GetState(ctx, "prod-a-b")
+	st.KeyID = "k3"
+	if err := s.PutState(ctx, st); err != nil {
+		t.Fatal(err)
+	}
+	read.KeyID = "stale"
+	if err := s.PutState(ctx, read); !errors.Is(err, state.ErrConflict) {
+		t.Fatalf("write with a stale revision must conflict: %v", err)
+	}
+	if got, _ := s.GetState(ctx, "prod-a-b"); got.KeyID != "k3" || got.Rev != st.Rev {
+		t.Fatalf("state %+v, want k3 at rev %s", got, st.Rev)
+	}
+}
+
+func TestHeartbeats(t *testing.T) {
+	s := &StateStore{API: &fakeS3{objects: map[string][]byte{}}, Bucket: "b", Prefix: "st"}
+	ctx := context.Background()
+	t1 := time.Date(2026, 11, 11, 10, 0, 0, 0, time.UTC)
+	if err := s.PutHeartbeat(ctx, "rotate", t1); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.PutHeartbeat(ctx, "apply", t1.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.Heartbeats(ctx)
+	if err != nil || !got["rotate"].Equal(t1) || !got["apply"].Equal(t1.Add(time.Hour)) {
+		t.Fatalf("heartbeats %v %v", got, err)
+	}
+	if all, _ := s.ListStates(ctx); len(all) != 0 {
+		t.Fatal("heartbeat listed as state")
 	}
 }

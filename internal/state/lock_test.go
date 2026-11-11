@@ -86,3 +86,25 @@ func TestLease(t *testing.T) {
 	}
 	_ = le.Release(ctx)
 }
+
+type failingLocker struct{ memLocker }
+
+func (f *failingLocker) Renew(context.Context, LockInfo) error { return errors.New("store down") }
+
+func TestLeaseLostWhenRenewalKeepsFailing(t *testing.T) {
+	f := &failingLocker{}
+	ctx := context.Background()
+	le, err := Lock(ctx, f, "me", "apply", 60*time.Millisecond, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = le.Release(ctx) }()
+	select {
+	case <-le.Lost():
+	case <-time.After(time.Second):
+		t.Fatal("lease not lost while renewals fail")
+	}
+	if err := le.Err(); !errors.Is(err, ErrLockLost) {
+		t.Fatalf("err %v", err)
+	}
+}
