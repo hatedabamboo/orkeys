@@ -1,77 +1,55 @@
-# Changelog
+# CHANGELOG
 
-All notable changes to this project are listed here.
-The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
-This project uses [Semantic Versioning](https://semver.org/).
+## v0.2.5 (2026-11-11)
 
-## [Unreleased]
+- (feat) `github` consumer type: orkeys writes the key to a GitHub Actions secret (repository, environment or
+  organization) and deletes it when the consumer or the manifest is removed. Token: `ORKEYS_GITHUB_SECRETS_TOKEN`
+  (default `GITHUB_TOKEN`) (#18) [ed04189](https://github.com/hatedabamboo/orkeys/commit/ed04189d90664a1135435fbdb743a271e3d6f71f)
+- (feat) `secret` in a key manifest can be a list of places (`path`, `field`). A change to the list reissues the key.
+  State with the old `secret_path` and `secret_field` is read as a list of one (#18) [ed04189](https://github.com/hatedabamboo/orkeys/commit/ed04189d90664a1135435fbdb743a271e3d6f71f)
 
-### Added
+## v0.2.4 (2026-11-10)
 
-- `github` consumer type: orkeys writes the key to a GitHub Actions secret (repository, environment or
-  organization) on create, import and rotation, and deletes it when the consumer or the manifest is removed. `plan`
-  shows `sync-github` for new or failed writes. Token: `ORKEYS_GITHUB_SECRETS_TOKEN` (default `GITHUB_TOKEN`).
-- `secret` in a key manifest can be a list of places (`path`, `field`). orkeys writes the same key to all of them on
-  create, import and rotation. A change to the list reissues the key. State now stores `secrets` as a list; state
-  with the old `secret_path` and `secret_field` is read as a list of one.
+- (feat) `disabled: true` in a key manifest disables the key at the provider and stops its rotation.
+  `track_disabled: true` in `policy.yaml` enables keys that are disabled at the provider but not in the manifest.
+  New events: `key_disabled`, `key_enabled` (#17) [d4573d6](https://github.com/hatedabamboo/orkeys/commit/d4573d6a84aa9b9342f48626d24ee113aeeab982)
+- (feat) More than one provider of the same type: `providers` in `policy.yaml` takes a list of `{name, kind, ...}`.
+  The map form still works (#16, #17) [847b290](https://github.com/hatedabamboo/orkeys/commit/847b290b762432cdc1b6eb9a315aaf9f5918a3a3)
+- (ci) Push correct image tags to the container registry (#15) [ef86b3f](https://github.com/hatedabamboo/orkeys/commit/ef86b3f7fbd2ab358a85255b819131b3807d5501)
 
-- Inventory mode: `validate`, `plan`, `apply`, `rotate`, `request`, `issued`, `import`, `hygiene`, `unlock` and
-  `exporter` commands. See README and `examples/inventory`.
-- `orkeys deepinfra` (`di`): list and get DeepInfra tokens with limit and spend. Writes need a dashboard login at
-  DeepInfra and fail with API keys (see README).
-- State in Vault or S3, secrets in Vault or AWS Secrets Manager.
-- State lock: S3 conditional writes or Vault check-and-set.
-- Key kinds defined in `policy.yaml`: any name, `source: manifest` (rotated) or `source: request` (self-service,
-  expires). Each kind sets TTL, default and maximum limit, limit period and allowed providers.
-- `import: {id, name}` in a manifest adopts an existing provider key; `orkeys import` prints such manifests.
-- One `budget: {reset, limit}` per key: the limit at the provider and its period. Spend metrics follow the period.
-- Self-service keys with per-person limits, encrypted with age to GitHub SSH keys.
-- Structured events (text or one JSON document with `-o json`) instead of notifications.
-- Prometheus exporter; it can read `policy.yaml` with `--policy`.
-- Vault AppRole and Kubernetes auth.
-- Vault TLS from `VAULT_CLIENT_CERT`, `VAULT_CLIENT_KEY` (client certificate, mTLS) and `VAULT_CACERT` (CA bundle).
-  It applies to all Vault requests, the login and the exporter.
-- Dockerfile.
-- Team members from GitHub teams. A `team.yaml` without `members` uses the GitHub team with the same slug, or
-  `github_team: <slug>`. `request`, `hygiene` and `plan` read it with `GITHUB_TOKEN` (`read:org`).
-- `orkeys request --team <name>` chooses the team of a person who is in more than one team.
-- `disabled: true` in a key manifest disables the key at the provider and stops its rotation. `track_disabled: true`
-  in `policy.yaml` also enables keys that are disabled at the provider but not in the manifest. New events:
-  `key_disabled`, `key_enabled`. With `track_disabled: false`, `plan` and `import` ignore disabled provider keys
-  without a manifest.
-- More than one provider of the same type: `providers` in `policy.yaml` takes a list of `{name, kind, ...}`.
-  Manifests, kinds, state and metrics use the name. The map form still works; its kind defaults to the name. The env
-  override for a name with `-` uses `_`: `ORKEYS_OPENROUTER_PRIVATE_KEY` (#16).
+## v0.2.3 (2026-11-09)
 
-### Changed
+- (feat) Alerts go to a team channel by kind `source`: `request` to `channels.notifications`, `manifest` to
+  `channels.alerts`. `kinds.<kind>.alert_channel` is deprecated and ignored (#14) [e7e1757](https://github.com/hatedabamboo/orkeys/commit/e7e17572f746361d5037929eb65920f007b20438)
+- (ci) Add workflow for container releases (#14) [cae504d](https://github.com/hatedabamboo/orkeys/commit/cae504db9bd090b978adb6f9b3d3ba96c85e2436)
 
-- OpenRouter key commands moved under `orkeys openrouter` (`or`): `orkeys list` is now `orkeys or list`.
-- `request` fails when the person is in more than one team and `--team` is not set. Before, the first team in
-  alphabetical order was used.
-- Alerts go to a team channel by kind `source`: `request` to `channels.notifications`, `manifest` to
-  `channels.alerts`. `plan` shows a `channels.alerts` change for existing keys of request kinds that sent alerts to
-  `channels.alerts`. The state field and the exporter label `alert_channel` do not change.
+## v0.2.2 (2026-11-09)
 
-### Deprecated
+- (feat) Vault TLS from `VAULT_CLIENT_CERT`, `VAULT_CLIENT_KEY` (mTLS) and `VAULT_CACERT` (#11, #12) [6f21678](https://github.com/hatedabamboo/orkeys/commit/6f2167805833205345213d3608cd1e2842d7cbd3) [6afed9f](https://github.com/hatedabamboo/orkeys/commit/6afed9faac9f772f92c1f1e39bbfb236eab35df7)
 
-- `kinds.<kind>.alert_channel` in `policy.yaml`. orkeys ignores it and prints a warning. The next release rejects it
-  as an unknown field.
+## v0.2.1 (2026-11-09)
 
-### Removed
+- (feat) Team members from GitHub teams. `orkeys request --team <name>` chooses the team of a person who is in more
+  than one team (#10) [2e6341c](https://github.com/hatedabamboo/orkeys/commit/2e6341cff15ea93b48c1fd847e8f22757f4c4ff2)
+- (docs) Update README and add workflow examples (#10) [13fd409](https://github.com/hatedabamboo/orkeys/commit/13fd409b8a1933d7b820d3a5e39c361e4586abd8)
 
-- Interactive mode. orkeys is now a CLI and an exporter daemon only.
+## v0.2.0 (2026-11-07)
 
-## [0.1.0] - 2026-11-02
+- (feat) Inventory mode: `validate`, `plan`, `apply`, `rotate`, `request`, `issued`, `import`, `hygiene`, `unlock`
+  and `exporter` commands. State in Vault or S3, secrets in Vault or AWS Secrets Manager, Prometheus exporter,
+  `orkeys deepinfra` (`di`), Dockerfile. OpenRouter commands moved under `orkeys openrouter` (`or`). Interactive
+  mode removed (#7) [2302aca](https://github.com/hatedabamboo/orkeys/commit/2302acaf0463b420d2b0d212c9978112d8198a9a)
 
-### Added
+## v0.1.2 (2026-11-02)
 
-- CLI commands: `list`, `get`, `create`, `update`, `enable`, `disable`, `delete`, `completion`.
-- Interactive mode. It runs inline in the console and redraws one fixed region.
-- Output formats `table`, `wide` and `json` (`-o`, or the `--json` shorthand). Interactive mode switches between table and JSON with `j`.
-- Key lookup by full hash, unique hash prefix or exact name.
-- Pagination across all pages, and filters for disabled keys and workspace.
-- Expiry input as a duration (`30d`), a date or RFC 3339.
-- GET requests retry on HTTP 429 and 5xx.
+- (chore) Bump the charmbracelet group with 3 updates (#2) [ff2bd53](https://github.com/hatedabamboo/orkeys/commit/ff2bd535142614179ca88548b003630e16f1ba61)
+- (chore) Update dependencies [cc6ad9b](https://github.com/hatedabamboo/orkeys/commit/cc6ad9b5031647fa738f49c3544efb19cbfb76ca)
 
-[Unreleased]: https://github.com/hatedabamboo/orkeys/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/hatedabamboo/orkeys/releases/tag/v0.1.0
+## v0.1.1 (2026-11-02)
+
+- (ci) Update workflows and bump GitHub Actions versions [114cc03](https://github.com/hatedabamboo/orkeys/commit/114cc03b54cfd4ae318778f571221c4b4bf14157) [dbf063d](https://github.com/hatedabamboo/orkeys/commit/dbf063d9bf90a903eecfe31a83d0005271fbd7cf)
+
+## v0.1.0 (2026-11-02)
+
+- (release) orkeys goes live: OpenRouter key commands `list`, `get`, `create`, `update`, `enable`, `disable`,
+  `delete`, interactive mode, output formats `table`, `wide`, `json` [d4fa176](https://github.com/hatedabamboo/orkeys/commit/d4fa1765b3763248de1ab641e92a0b09bc4a5b4d)
