@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -66,7 +67,8 @@ func (a *app) inventoryCmds() []*cobra.Command {
 	return []*cobra.Command{
 		a.unlockCmd(),
 		a.validateCmd(), a.planCmd(), a.applyCmd(), a.rotateCmd(),
-		a.requestCmd(), a.issuedCmd(), a.importCmd(), a.hygieneCmd(), a.exporterCmd(),
+		a.requestCmd(), a.issuedCmd(), a.revokeCmd(), a.stateCmd(),
+		a.importCmd(), a.hygieneCmd(), a.exporterCmd(),
 	}
 }
 
@@ -255,6 +257,93 @@ func (a *app) issuedCmd() *cobra.Command {
 	cmd.Flags().StringVar(&f.Owner, "owner", "", "only this GitHub login")
 	cmd.Flags().StringVar(&f.Kind, "kind", "", "only keys of this kind")
 	cmd.Flags().BoolVar(&markdown, "markdown", false, "write a Markdown table")
+	return cmd
+}
+
+func (a *app) revokeCmd() *cobra.Command {
+	var (
+		yes    bool
+		reason string
+	)
+	cmd := &cobra.Command{
+		Use:   "revoke <name>...",
+		Short: "Revoke requested keys before they expire and remove their state",
+		Long: `revoke deletes requested keys (kinds with source: request) at the provider, removes their secret
+fields and GitHub secrets, and removes their state. It does not revoke manifest keys: delete the
+manifest or set disabled: true instead. Get the names from orkeys issued.`,
+		Example: `  orkeys revoke personal-jdoe-20261101-120000
+  orkeys revoke --reason "laptop lost" local-jdoe-20261101-120000`,
+		Args: cobra.MinimumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if !yes && (!isTTY() || a.output == "json") {
+				return errors.New("refusing to revoke without confirmation: pass --yes")
+			}
+			e, err := a.engine(cmd.Context(), "")
+			if err != nil {
+				return err
+			}
+			if !yes && !confirm(fmt.Sprintf("Revoke %s?", strings.Join(args, ", "))) {
+				return errors.New("aborted")
+			}
+			err = a.withLock(cmd.Context(), e, "revoke", func(ctx context.Context) error {
+				return e.Revoke(ctx, args, reason)
+			})
+			return a.finish(map[string]any{"revoked": args}, err)
+		},
+	}
+	cmd.Flags().BoolVarP(&yes, "yes", "y", false, "do not ask for confirmation")
+	cmd.Flags().StringVar(&reason, "reason", "", "why the key is revoked; goes to the key_revoked event")
+	return cmd
+}
+
+func (a *app) stateCmd() *cobra.Command {
+	var f engine.TrackedFilter
+	cmd := &cobra.Command{
+		Use:   "state [name]",
+		Short: "List the keys in the state store, or show one state entry",
+		Long: `Without an argument, state lists all keys in the state store. SOURCE is manifest, request, or
+orphan (no manifest and not a requested key; the next apply revokes it).
+With a name, state prints that state entry as JSON.
+state reads only the state store. It needs no provider management keys.`,
+		Args: cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			inv, err := a.loadInventory()
+			if err != nil {
+				return err
+			}
+			var bf backend.Factory
+			store, err := bf.State(cmd.Context(), inv.Policy.State)
+			if err != nil {
+				return err
+			}
+			if len(args) == 1 {
+				st, err := store.GetState(cmd.Context(), args[0])
+				if err != nil {
+					return err
+				}
+				if st == nil {
+					return fmt.Errorf("key %s: not in state", args[0])
+				}
+				return printJSON(os.Stdout, engine.Tracked(inv, []*state.State{st}, engine.TrackedFilter{})[0])
+			}
+			states, err := store.ListStates(cmd.Context())
+			if err != nil {
+				return err
+			}
+			keys := engine.Tracked(inv, states, f)
+			if a.output == "json" {
+				return printJSON(os.Stdout, keys)
+			}
+			writeTracked(os.Stdout, keys)
+			return nil
+		},
+	}
+	fl := cmd.Flags()
+	fl.StringVar(&f.Team, "team", "", "only this team")
+	fl.StringVar(&f.Kind, "kind", "", "only keys of this kind")
+	fl.StringVar(&f.Owner, "owner", "", "only keys of this GitHub login")
+	fl.StringVar(&f.Provider, "provider", "", "only keys of this provider")
+	fl.StringVar(&f.Source, "source", "", "only keys of this source: manifest, request or orphan")
 	return cmd
 }
 

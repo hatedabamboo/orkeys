@@ -106,7 +106,7 @@ func (s *State) UnmarshalJSON(b []byte) error {
 		return err
 	}
 	*s = State(v.plain)
-	s.Secrets = v.legacySecret.refs(s.Secrets)
+	s.Secrets = v.refs(s.Secrets)
 	return nil
 }
 
@@ -120,7 +120,7 @@ func (p *PendingRevoke) UnmarshalJSON(b []byte) error {
 		return err
 	}
 	*p = PendingRevoke(v.plain)
-	p.Secrets = v.legacySecret.refs(p.Secrets)
+	p.Secrets = v.refs(p.Secrets)
 	return nil
 }
 

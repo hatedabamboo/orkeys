@@ -23,7 +23,7 @@ orkeys manages LLM provider API keys (OpenRouter, DeepInfra). It has two modes:
 |---|---|
 | `main.go` | Entry point. Sets `main.version` from ldflags |
 | `internal/cli` | Cobra commands: `openrouter.go`, `deepinfra.go`, `inventory.go`, `exporter_cmd.go`. Wiring in `wire.go`, output in `render.go` and `output.go` |
-| `internal/engine` | Inventory logic: `plan.go`, `apply.go`, `rotate.go`, `request.go`, `hygiene.go`, `import.go`, `teams.go`, `github.go`, `event.go`. Test fakes in `fakes_test.go` |
+| `internal/engine` | Inventory logic: `plan.go`, `apply.go`, `rotate.go`, `request.go`, `revoke.go`, `tracked.go`, `hygiene.go`, `import.go`, `teams.go`, `github.go`, `event.go`. Test fakes in `fakes_test.go` |
 | `internal/manifest` | Load and validate `policy.yaml`, `team.yaml` and key manifests. Types in `types.go`. Test repo in `testdata/repo` |
 | `internal/provider` | Common provider interface and registry; OpenRouter and DeepInfra adapters |
 | `internal/openrouter`, `internal/deepinfra` | HTTP clients for the provider APIs |
