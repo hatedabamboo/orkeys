@@ -163,6 +163,14 @@ func (inv *Inventory) Validate() []Problem {
 		if info, ok := provider.Lookup(pol.ProviderKind(k.Provider)); ok && len(k.Scopes) > 0 && !info.Caps.Scopes {
 			add(p, "scopes: %s keys have no scopes", k.Provider)
 		}
+		if info, ok := provider.Lookup(pol.ProviderKind(k.Provider)); ok {
+			if k.Disabled && !info.Caps.Disable {
+				add(p, "disabled: %s keys cannot be disabled; delete the manifest to revoke the key", k.Provider)
+			}
+			if info.Caps.MaxExpiry > 0 && k.TTL.Duration > info.Caps.MaxExpiry {
+				add(p, "ttl: more than %s, the longest expiry of %s keys", values.Days(info.Caps.MaxExpiry), k.Provider)
+			}
+		}
 		if slices.Contains(k.Scopes, "unrestricted") {
 			add(p, "scopes: unrestricted is not allowed")
 		}

@@ -24,7 +24,7 @@ func newOpenRouter(c Config) *openRouter {
 func (o *openRouter) Name() string   { return "openrouter" }
 func (o *openRouter) SelfID() string { return o.selfID }
 
-var openRouterCaps = Caps{NativeExpiry: true, PerKeyLimit: true, LimitReset: true, LastUsed: true}
+var openRouterCaps = Caps{NativeExpiry: true, PerKeyLimit: true, LimitReset: true, LastUsed: true, Disable: true}
 
 func (o *openRouter) Caps() Caps { return openRouterCaps }
 

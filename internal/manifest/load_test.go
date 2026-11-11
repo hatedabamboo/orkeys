@@ -134,6 +134,29 @@ budget: {limit: 10}
 ttl: 30d
 secret: {path: kv/llm/s}
 `, "openrouter keys have no scopes"},
+		"disabled on openai": {"teams/chat-core/prod-chat-core-oa.yaml", `
+name: prod-chat-core-oa
+kind: production
+provider: openai
+env: prod
+service: oa
+description: d
+budget: {limit: 10}
+ttl: 30d
+disabled: true
+secret: {path: kv/llm/oa}
+`, "disabled: openai keys cannot be disabled"},
+		"ttl over openai max": {"teams/chat-core/prod-chat-core-ob.yaml", `
+name: prod-chat-core-ob
+kind: production
+provider: openai
+env: prod
+service: ob
+description: d
+budget: {limit: 10}
+ttl: 400d
+secret: {path: kv/llm/ob}
+`, "ttl: more than 365d, the longest expiry of openai keys"},
 		"import without name": {"teams/chat-core/prod-chat-core-i.yaml", `
 name: prod-chat-core-i
 kind: production
@@ -675,7 +698,7 @@ func TestProvidersProblems(t *testing.T) {
 		"duplicate":     {"providers:\n  - {name: openrouter}\n  - {name: openrouter}\n", `duplicate name "openrouter"`, ""},
 		"unknown field": {"providers:\n  - {name: openrouter, mgmt_key: x}\n", "field mgmt_key not found", ""},
 		"map name":      {"providers:\n  openrouter: {name: other}\n", "differs from the key", ""},
-		"unknown kind":  {"providers:\n  - {name: openrouter}\n  - {name: deepinfra}\n  - {name: llm, kind: openai}\n", "", `providers.llm: unknown kind "openai"`},
+		"unknown kind":  {"providers:\n  - {name: openrouter}\n  - {name: deepinfra}\n  - {name: llm, kind: mistral}\n", "", `providers.llm: unknown kind "mistral"`},
 		"bad name":      {"providers:\n  - {name: openrouter}\n  - {name: deepinfra}\n  - {name: Or_2, kind: openrouter}\n", "", "providers.Or_2: name must match"},
 	}
 	for name, c := range cases {
