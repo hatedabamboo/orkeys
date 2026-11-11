@@ -666,10 +666,10 @@ Layout:
 
 ### Releasing
 
-1. Move the `Unreleased` entries in `CHANGELOG.md` under a new version.
-2. Tag and push: `git tag v0.1.0 && git push origin v0.1.0`.
-3. The Release workflow runs GoReleaser and creates a **draft** GitHub release with the archives and checksums.
-4. Check the draft, then publish it.
+1. Bump `VERSION` with `make bump-patch`, `make bump-minor` or `make bump-major`.
+2. Add a `## vX.Y.Z (YYYY-MM-DD)` section to `CHANGELOG.md` with the changes and their commits.
+3. Merge to `main`. The Release workflow tags the commit with the content of `VERSION`, builds the binaries and
+   creates the GitHub release.
 
 ## License
 
