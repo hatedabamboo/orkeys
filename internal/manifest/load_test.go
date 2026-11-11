@@ -24,7 +24,7 @@ func TestLoadValid(t *testing.T) {
 	if k.Team != "chat-core" || k.TTL.Duration != 90*24*time.Hour {
 		t.Fatalf("key: %+v", k)
 	}
-	if k.Budget.Limit != 200 || k.Budget.Reset != "monthly" || k.SecretField() != "api_key" || false {
+	if k.Budget.Limit != 200 || k.Budget.Reset != "monthly" || len(k.SecretTargets()) != 1 || k.SecretTargets()[0].Field != "api_key" || false {
 		t.Fatal("defaults")
 	}
 	if inv.Policy.Kind("local").Budget.Limit != 20 || inv.Policy.Kind("personal").MaxActive != 2 {
@@ -155,7 +155,128 @@ ttl: 30d
 secret: {path: kv/llm/c}
 consumers:
   - {type: eso, cluster: a, namespace: b, restart: [pod/x]}
-`, "externalsecret: required"},
+`, "externalsecret: required"}, "github no repo or org": {"teams/chat-core/prod-chat-core-c.yaml", `
+name: prod-chat-core-c
+kind: production
+provider: openrouter
+env: prod
+service: c
+description: d
+budget: {limit: 10}
+ttl: 30d
+secret: {path: kv/llm/c}
+consumers:
+  - {type: github, name: X}
+`, "set exactly one of repo or org"},
+		"github bad name": {"teams/chat-core/prod-chat-core-c.yaml", `
+name: prod-chat-core-c
+kind: production
+provider: openrouter
+env: prod
+service: c
+description: d
+budget: {limit: 10}
+ttl: 30d
+secret: {path: kv/llm/c}
+consumers:
+  - {type: github, repo: a/b, name: GITHUB_X}
+`, "not a valid GitHub secret name"},
+		"github env with org": {"teams/chat-core/prod-chat-core-c.yaml", `
+name: prod-chat-core-c
+kind: production
+provider: openrouter
+env: prod
+service: c
+description: d
+budget: {limit: 10}
+ttl: 30d
+secret: {path: kv/llm/c}
+consumers:
+  - {type: github, org: a, environment: prod, name: X}
+`, "environment: only with repo"},
+		"github visibility with repo": {"teams/chat-core/prod-chat-core-c.yaml", `
+name: prod-chat-core-c
+kind: production
+provider: openrouter
+env: prod
+service: c
+description: d
+budget: {limit: 10}
+ttl: 30d
+secret: {path: kv/llm/c}
+consumers:
+  - {type: github, repo: a/b, visibility: all, name: X}
+`, "visibility: only with org"},
+		"github with cluster": {"teams/chat-core/prod-chat-core-c.yaml", `
+name: prod-chat-core-c
+kind: production
+provider: openrouter
+env: prod
+service: c
+description: d
+budget: {limit: 10}
+ttl: 30d
+secret: {path: kv/llm/c}
+consumers:
+  - {type: github, repo: a/b, name: X, cluster: c}
+`, "not for type github"},
+		"eso with repo": {"teams/chat-core/prod-chat-core-c.yaml", `
+name: prod-chat-core-c
+kind: production
+provider: openrouter
+env: prod
+service: c
+description: d
+budget: {limit: 10}
+ttl: 30d
+secret: {path: kv/llm/c}
+consumers:
+  - {type: eso, cluster: a, namespace: b, externalsecret: e, repo: a/b}
+`, "only for type github"},
+		"github duplicate": {"teams/chat-core/prod-chat-core-c.yaml", `
+name: prod-chat-core-c
+kind: production
+provider: openrouter
+env: prod
+service: c
+description: d
+budget: {limit: 10}
+ttl: 30d
+secret: {path: kv/llm/c}
+consumers:
+  - {type: github, repo: a/b, name: X}
+  - {type: github, repo: a/b, name: x}
+`, "already written by prod-chat-core-c"},
+		"secret listed twice": {"teams/chat-core/prod-chat-core-d.yaml", `
+name: prod-chat-core-d
+kind: production
+provider: openrouter
+env: prod
+description: d
+secret:
+  - {path: kv/llm/d}
+  - {path: kv/llm/d, field: api_key}
+`, "secret[1]: kv/llm/d#api_key is listed twice"},
+		"secret list path used by other key": {"teams/chat-core/prod-chat-core-d.yaml", `
+name: prod-chat-core-d
+kind: production
+provider: openrouter
+env: prod
+description: d
+secret:
+  - {path: kv/llm/d}
+  - {path: kv/llm/prod/chat-core/dialog}
+`, "path: already used by prod-chat-core-"},
+		"secret list no path": {"teams/chat-core/prod-chat-core-d.yaml", `
+name: prod-chat-core-d
+kind: production
+provider: openrouter
+env: prod
+description: d
+secret:
+  - {path: kv/llm/d}
+  - {field: x}
+`, "secret[1].path: required"},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -573,5 +694,31 @@ func TestProvidersProblems(t *testing.T) {
 				t.Fatalf("want %q in %s", c.problem, ps)
 			}
 		})
+	}
+}
+
+func TestSecretList(t *testing.T) {
+	root := copyRepo(t)
+	f := filepath.Join(root, "teams/chat-core/prod-chat-core-dialog.yaml")
+	b, _ := os.ReadFile(f)
+	body := strings.Replace(string(b), "secret:\n  path: kv/llm/prod/chat-core/dialog\n",
+		"secret:\n  - path: kv/llm/prod/chat-core/dialog\n  - path: kv/llm/staging/chat-core/dialog\n    field: OR_KEY\n", 1)
+	_ = os.WriteFile(f, []byte(body), 0o644)
+	inv, err := Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ps := inv.Validate(); len(ps) != 0 {
+		t.Fatalf("problems: %v", ps)
+	}
+	got := inv.Key("prod-chat-core-dialog").SecretTargets()
+	want := []Secret{{"kv/llm/prod/chat-core/dialog", "api_key"}, {"kv/llm/staging/chat-core/dialog", "OR_KEY"}}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("targets: %v", got)
+	}
+
+	_ = os.WriteFile(f, []byte(strings.Replace(body, "field: OR_KEY", "feild: OR_KEY", 1)), 0o644)
+	if _, err := Load(root); err == nil || !strings.Contains(err.Error(), "feild") {
+		t.Fatalf("want unknown field error, got %v", err)
 	}
 }

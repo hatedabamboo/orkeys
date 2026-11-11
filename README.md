@@ -321,12 +321,17 @@ service (Alertmanager, a CI step, a bot) can route them.
 | `budget.limit` | no | Limit in USD at the provider; the provider blocks the key when spend in the period reaches it. Default: the kind `budget.limit`. Up to the kind `max_limit` |
 | `budget.reset` | no | Limit period: `daily`, `weekly`, `monthly` (DeepInfra: monthly only). Default: the kind `budget.reset` |
 | `ttl` | no | `90d`, `2w`, `24h`. Default and maximum: the kind `ttl` |
-| `secret.path`, `secret.field` | path: yes | Where the key goes. Vault: `<mount>/<path>`; AWS: secret name. Field default `api_key`. Other fields in the same secret are kept |
-| `consumers[]` | no | `type` (`eso` or `direct`), `cluster`, `namespace`, `externalsecret` (eso), `restart` (`deployment/x`, `statefulset/x`, `daemonset/x`, `cronjob/x`). orkeys restarts only what `restart` lists |
+| `secret.path`, `secret.field` | path: yes | Where the key goes. Vault: `<mount>/<path>`; AWS: secret name. Field default `api_key`. Other fields in the same secret are kept. `secret` is one mapping or a list of mappings: orkeys writes the same key to each place |
+| `consumers[]` | no | `type` (`eso`, `direct` or `github`). For `eso` and `direct`: `cluster`, `namespace`, `externalsecret` (eso), `restart` (`deployment/x`, `statefulset/x`, `daemonset/x`, `cronjob/x`). orkeys restarts only what `restart` lists. For `github`: `repo` (`owner/repo`) or `org`, `environment` (repo only), `name`, `visibility` (org only: `private` (default) or `all`). See [GitHub Actions secrets](#github-actions-secrets) |
 | `import.id`, `import.name` | no | Adopt an existing provider key instead of creating one. `name` is its current name at the provider. See below |
 | `disabled` | no | `true` disables the key at the provider and stops its rotation. Default `false`. See below |
 
 ```yaml
+secret:                             # one key in two places; each rotation updates both
+  - path: kv/llm/prod/search/env
+    field: api_key
+  - path: kv/llm/staging/search/env
+    field: OR_API_KEY
 consumers:
   - type: eso                       # force-sync, then restart the API
     cluster: prod-eu
@@ -339,11 +344,55 @@ consumers:
     externalsecret: search-worker-llm
 ```
 
+#### GitHub Actions secrets
+
+Limits:
+
+- orkeys writes a second copy of the key into GitHub. GitHub secrets are write-only, so orkeys cannot read them back
+  to check them. "Synced" means "the write succeeded".
+- The token can write secrets in all the repos it can access. Give it access only to the repos in the manifests.
+- If you control the workflows, prefer a `direct` consumer with no `restart`. Then the workflow reads Vault or AWS
+  with GitHub OIDC (`hashicorp/vault-action`, `aws-actions/configure-aws-credentials`), and no copy exists.
+
+A `github` consumer is a GitHub Actions secret. orkeys writes the key to it:
+
+- `apply` writes it when it creates or imports the key.
+- `plan` shows `sync-github` when the manifest adds a `github` consumer, or when a write failed before. `apply`
+  writes the new secrets and deletes the secrets of removed `github` consumers.
+- `rotate` writes the new key during the consumer sync. If a write fails, the rotation fails and the old key stays
+  active. Fix the cause, then run `orkeys rotate --retry <key>`.
+- When you delete the manifest, `apply` deletes the GitHub secrets first, then revokes the key.
+
+```yaml
+secret:                             # one key in two places; each rotation updates both
+  - path: kv/llm/prod/search/env
+    field: api_key
+  - path: kv/llm/staging/search/env
+    field: OR_API_KEY
+consumers:
+  - type: github                    # repository secret
+    repo: acme/search
+    name: OPENROUTER_API_KEY
+  - type: github                    # environment secret
+    repo: acme/search
+    environment: prod
+    name: OPENROUTER_API_KEY
+  - type: github                    # organization secret, visible to private repos
+    org: acme
+    name: SEARCH_OPENROUTER_KEY
+```
+
+The token is `ORKEYS_GITHUB_SECRETS_TOKEN`, or `GITHUB_TOKEN` if it is not set. It needs "Secrets: read and write"
+on the repositories (fine-grained token or GitHub App), and "Organization secrets: read and write" for `org`. The
+default `GITHUB_TOKEN` of a workflow cannot write secrets. A workflow that is running during a rotation keeps the old
+value until its next run; `revoke_grace` covers this.
+
 If a consumer still uses the old key after `revoke_grace`, its spend grows and orkeys does not revoke the old key
 (`old_key_in_use`). So a consumer without `restart` must pick up the new secret by itself.
 
-Change `secret.path` or `secret.field` to move a key: orkeys rotates it to the new place and removes the old field after
-the revoke. Delete the manifest to revoke the key; orkeys removes only its own field from the secret.
+Add, remove or change a place in `secret` to move a key: orkeys rotates it, writes the new key to all places in the
+list, and removes the fields of removed places after the revoke. Delete the manifest to revoke the key; orkeys removes
+only its own fields from the secrets.
 
 #### Disabling a key
 
@@ -375,8 +424,8 @@ instead of creating a new one. orkeys never revokes or disables a key that has n
 
 1. Run `orkeys import`. It prints a manifest for each provider key without state, with `import.id` and `import.name`
    filled in and the current limit as `budget`.
-2. Write the current key value to `secret.path` (field `secret.field`, default `api_key`). orkeys cannot read a key
-   value from the provider.
+2. Write the current key value to `secret.path` (field `secret.field`, default `api_key`). With a list of places,
+   write it to the first place; `apply` copies it to the others. orkeys cannot read a key value from the provider.
 3. Save the manifest as `teams/<team>/<name>.yaml`, fill in the `TODO` fields and open a PR.
 
 ```yaml
@@ -444,6 +493,8 @@ The result key depends on the command: `plan` (apply), `issued` (request), `find
 | `expiry_notice` | info | A self-service key expires within `notify_before` |
 | `rotation_failed` | alert | A consumer did not sync or restart; the old key stays active |
 | `old_key_in_use` | alert | The old key was used after the switch; it is not revoked |
+| `github_synced` | info | `apply` wrote or deleted GitHub Actions secrets |
+| `github_sync_failed` | alert | A GitHub Actions secret write or delete failed; the next `apply` tries again |
 
 `level` picks `channel`: `info` uses the team's `channels.notifications`, `alert` uses `channels.alerts`.
 `run_url` is set when orkeys runs in GitHub Actions.
@@ -482,6 +533,7 @@ Read-only commands (`plan`, `issued`, `import`) need read access to the state an
 | `AWS_REGION`, `AWS_PROFILE`, ... | S3 and Secrets Manager | Standard AWS SDK credential chain: env vars, profile, web identity (GitHub OIDC), pod role |
 | `ORKEYS_<PROVIDER>_KEY`, `ORKEYS_<PROVIDER>_SELF_ID` | all except validate | Management key and its ID; override `management_key` |
 | `GITHUB_TOKEN` | request, hygiene, plan | Team members from GitHub teams and org membership checks (`read:org`). Without it, `request` fails for a GitHub team, `hygiene` skips owner checks, `plan` skips team checks |
+| `ORKEYS_GITHUB_SECRETS_TOKEN` | apply, rotate | Writes GitHub Actions secrets for `github` consumers. Default: `GITHUB_TOKEN` |
 
 AWS permissions: `s3:GetObject`, `s3:PutObject`, `s3:DeleteObject` on `<bucket>/<prefix>/*` and `s3:ListBucket` on the
 bucket; `secretsmanager:GetSecretValue`, `CreateSecret`, `PutSecretValue`, `TagResource`, `DeleteSecret` on the
@@ -509,13 +561,14 @@ races with a takeover of an expired lock can remove the new holder's lock.
 ### Rotation
 
 1. When a manifest key is `rotate_before` (3d) from expiry, `rotate` creates a new key, saves the state, and writes
-   the key to the secrets store. If the write fails, orkeys deletes the new key and restores the state.
+   the key to all places in `secret`. If a write fails, orkeys puts the old values back in the places it already
+   wrote, deletes the new key and restores the state.
 2. For each `eso` consumer, it annotates the ExternalSecret with `force-sync` and waits until it is Ready with a newer
    `refreshTime`. Then it runs `kubectl rollout restart` and `rollout status` only for the targets in `restart`. A
    consumer with no `restart` is not restarted: use this for workloads that reload the secret by themselves (a mounted
    secret volume, or an app that reads Vault on each request). `direct` consumers (workloads that read the secrets
    store themselves) get no force-sync, only their `restart` targets. CronJobs are not restarted; the next run reads
-   the new secret.
+   the new secret. `github` consumers get the new key written to their GitHub Actions secrets.
 3. 15 minutes after the switch, a `rotate` run records the old key's usage (total usage on OpenRouter, spend this
    month on DeepInfra). After `revoke_grace` (24h), `rotate` compares it again. If the usage grew, a consumer still has
    the old key: orkeys does not revoke it and marks the rotation as failed. If no run recorded the usage in between,
@@ -606,7 +659,7 @@ Layout:
 | `internal/vault`, `internal/s3store`, `internal/awssm`, `internal/backend` | Vault KV v2, S3, Secrets Manager, and the factory that picks them |
 | `internal/engine` | plan, apply, rotate, request, issued, hygiene, import, report |
 | `internal/exporter` | Prometheus metrics |
-| `internal/kube`, `internal/deliver`, `internal/github` | kubectl, age delivery, org membership |
+| `internal/kube`, `internal/deliver`, `internal/github` | kubectl, age delivery, org membership, Actions secrets |
 | `internal/cli` | cobra commands: `openrouter.go`, `deepinfra.go`, `inventory.go`, `exporter_cmd.go`; wiring in `wire.go`, output in `render.go` |
 | `examples/inventory` | example inventory repository with rotate and hygiene workflows; a test keeps it valid |
 | `internal/values` | input parsing and formatting |

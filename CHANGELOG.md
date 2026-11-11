@@ -8,6 +8,13 @@ This project uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- `github` consumer type: orkeys writes the key to a GitHub Actions secret (repository, environment or
+  organization) on create, import and rotation, and deletes it when the consumer or the manifest is removed. `plan`
+  shows `sync-github` for new or failed writes. Token: `ORKEYS_GITHUB_SECRETS_TOKEN` (default `GITHUB_TOKEN`).
+- `secret` in a key manifest can be a list of places (`path`, `field`). orkeys writes the same key to all of them on
+  create, import and rotation. A change to the list reissues the key. State now stores `secrets` as a list; state
+  with the old `secret_path` and `secret_field` is read as a list of one.
+
 - Inventory mode: `validate`, `plan`, `apply`, `rotate`, `request`, `issued`, `import`, `hygiene`, `unlock` and
   `exporter` commands. See README and `examples/inventory`.
 - `orkeys deepinfra` (`di`): list and get DeepInfra tokens with limit and spend. Writes need a dashboard login at

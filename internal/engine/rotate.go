@@ -98,7 +98,7 @@ func (e *Engine) rotateOne(ctx context.Context, st *state.State, keys []provider
 			changed = false
 		}
 		if st.Rotation == state.RotationPending {
-			if err := e.syncConsumers(ctx, k); err != nil {
+			if err := e.syncConsumers(ctx, k, st); err != nil {
 				st.Rotation, st.RotationError = state.RotationFailed, err.Error()
 				e.emit(st, LevelAlert, EventRotationFailed, "rotation failed: %v; the old key stays active; after the fix run: orkeys rotate --retry %s", err, st.Name)
 				return e.putState(ctx, st)
@@ -187,9 +187,9 @@ func (e *Engine) processRevokes(ctx context.Context, st *state.State, keys []pro
 			}
 		}
 		changed = true
-		if pr.SecretPath != "" {
-			if err := e.Secrets.DeleteField(ctx, pr.SecretPath, pr.SecretField); err != nil {
-				e.logf("%s: remove old secret field %s#%s: %v", st.Name, pr.SecretPath, pr.SecretField, err)
+		for _, r := range pr.Secrets {
+			if err := e.Secrets.DeleteField(ctx, r.Path, r.Field); err != nil {
+				e.logf("%s: remove old secret field %s: %v", st.Name, r, err)
 			}
 		}
 		e.emit(st, LevelInfo, EventOldKeyRevoked, "old key %s revoked (%s)", short(pr.KeyID), pr.Reason)
@@ -198,12 +198,18 @@ func (e *Engine) processRevokes(ctx context.Context, st *state.State, keys []pro
 	return changed, nil
 }
 
-func (e *Engine) syncConsumers(ctx context.Context, k *manifest.Key) error {
-	if e.Kube == nil {
-		return errors.New("no kubectl configured")
-	}
+func (e *Engine) syncConsumers(ctx context.Context, k *manifest.Key, st *state.State) error {
 	var errs []error
+	if err := e.syncGitHub(ctx, k, st); err != nil {
+		errs = append(errs, err)
+	}
 	for _, c := range k.Consumers {
+		if c.Type == manifest.ConsumerGitHub {
+			continue
+		}
+		if e.Kube == nil {
+			return errors.Join(append(errs, errors.New("no kubectl configured"))...)
+		}
 		if c.Type == manifest.ConsumerESO {
 			if err := e.Kube.ForceSync(ctx, c.Cluster, c.Namespace, c.ExternalSecret); err != nil {
 				errs = append(errs, err)

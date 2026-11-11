@@ -14,17 +14,19 @@ const (
 )
 
 const (
-	EventKeyIssued      = "key_issued"
-	EventKeyImported    = "key_imported"
-	EventKeyRevoked     = "key_revoked"
-	EventKeyDisabled    = "key_disabled"
-	EventKeyEnabled     = "key_enabled"
-	EventRotationStart  = "rotation_started"
-	EventRotationSynced = "rotation_synced"
-	EventRotationFailed = "rotation_failed"
-	EventOldKeyRevoked  = "old_key_revoked"
-	EventOldKeyInUse    = "old_key_in_use"
-	EventExpiryNotice   = "expiry_notice"
+	EventKeyIssued        = "key_issued"
+	EventKeyImported      = "key_imported"
+	EventKeyRevoked       = "key_revoked"
+	EventKeyDisabled      = "key_disabled"
+	EventKeyEnabled       = "key_enabled"
+	EventRotationStart    = "rotation_started"
+	EventRotationSynced   = "rotation_synced"
+	EventRotationFailed   = "rotation_failed"
+	EventOldKeyRevoked    = "old_key_revoked"
+	EventOldKeyInUse      = "old_key_in_use"
+	EventExpiryNotice     = "expiry_notice"
+	EventGitHubSynced     = "github_synced"
+	EventGitHubSyncFailed = "github_sync_failed"
 )
 
 type Event struct {

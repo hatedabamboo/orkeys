@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -23,6 +24,8 @@ import (
 const (
 	EnvRepo        = "ORKEYS_REPO"
 	EnvGitHubToken = "GITHUB_TOKEN"
+	// EnvGitHubSecretsToken writes GitHub Actions secrets for github consumers. Default: GITHUB_TOKEN.
+	EnvGitHubSecretsToken = "ORKEYS_GITHUB_SECRETS_TOKEN"
 )
 
 func (a *app) loadInventory() (*manifest.Inventory, error) {
@@ -151,6 +154,9 @@ func (a *app) engine(ctx context.Context, outDir string) (*engine.Engine, error)
 	}
 	if tok := os.Getenv(EnvGitHubToken); tok != "" && inv.Policy.GitHub.Org != "" {
 		e.Org = &github.Org{Name: inv.Policy.GitHub.Org, Token: tok, API: inv.Policy.GitHub.APIURL}
+	}
+	if tok := cmp.Or(os.Getenv(EnvGitHubSecretsToken), os.Getenv(EnvGitHubToken)); tok != "" {
+		e.GitHub = &github.Secrets{Token: tok, API: inv.Policy.GitHub.APIURL}
 	}
 	return e, nil
 }

@@ -27,11 +27,17 @@ func (e *Engine) Apply(ctx context.Context, plan *Plan) error {
 func (e *Engine) applyOne(ctx context.Context, a Action) error {
 	switch a.Type {
 	case ActCreate, ActRecreate:
-		_, err := e.issue(ctx, a.Key, a.State, "")
-		return err
+		st, err := e.issue(ctx, a.Key, a.State, "")
+		if st == nil {
+			return err
+		}
+		return errors.Join(err, e.syncGitHubAndSave(ctx, a.Key, st))
 
 	case ActImport:
 		return e.adopt(ctx, a.Key, a.Current)
+
+	case ActSyncGitHub:
+		return e.syncGitHubAndSave(ctx, a.Key, a.State)
 
 	case ActReissue:
 		_, err := e.startRotation(ctx, a.Key, a.State, "reissue: "+a.Detail)
@@ -88,6 +94,16 @@ func (e *Engine) applyOne(ctx context.Context, a Action) error {
 }
 
 func (e *Engine) remove(ctx context.Context, st *state.State, reason string) error {
+	// Delete the GitHub secrets first: if that fails, nothing is revoked yet and the next run tries again.
+	if len(st.GitHubSecrets) > 0 {
+		err := e.syncGitHub(ctx, nil, st)
+		if serr := e.putState(ctx, st); serr != nil {
+			err = errors.Join(err, serr)
+		}
+		if err != nil {
+			return err
+		}
+	}
 	var errs []error
 	for _, id := range st.KnownIDs() {
 		if err := e.revoke(ctx, st.Provider, id); err != nil {
@@ -97,9 +113,9 @@ func (e *Engine) remove(ctx context.Context, st *state.State, reason string) err
 	if len(errs) > 0 {
 		return errors.Join(errs...)
 	}
-	if st.SecretPath != "" {
-		if err := e.Secrets.DeleteField(ctx, st.SecretPath, st.SecretField); err != nil {
-			return err
+	for _, r := range st.Secrets {
+		if err := e.Secrets.DeleteField(ctx, r.Path, r.Field); err != nil {
+			return fmt.Errorf("remove secret %s: %w", r, err)
 		}
 	}
 	if err := e.State.DeleteState(ctx, st.Name); err != nil {
@@ -124,10 +140,10 @@ func (e *Engine) adopt(ctx context.Context, k *manifest.Key, cur *provider.Key) 
 	if err != nil {
 		return err
 	}
-	field := k.SecretField()
-	value, err := secrets.ReadField(ctx, e.Secrets, k.Secret.Path, field)
+	src := k.SecretTargets()[0]
+	value, err := secrets.ReadField(ctx, e.Secrets, src.Path, src.Field)
 	if err != nil {
-		return fmt.Errorf("write the current key to %s#%s first: %w", k.Secret.Path, field, err)
+		return fmt.Errorf("write the current key to %s#%s first: %w", src.Path, src.Field, err)
 	}
 	if p.Caps().PerKeyLimit {
 		limit := k.Budget.Limit
@@ -141,16 +157,17 @@ func (e *Engine) adopt(ctx context.Context, k *manifest.Key, cur *provider.Key) 
 	if cur.ExpiresAt != nil && cur.ExpiresAt.Before(st.ExpiresAt) {
 		st.ExpiresAt = *cur.ExpiresAt
 	}
+	// Write the value to all places before the state is saved: on failure the import runs again next time.
+	// The first place has the value already: this write adds the metadata.
+	if err := e.writeSecrets(ctx, k, st.Secrets, value, cur.ID, ""); err != nil {
+		return fmt.Errorf("%s: %w", k.Name, err)
+	}
 	if err := e.putState(ctx, st); err != nil {
 		return err
 	}
-	meta := map[string]string{"orkeys-key": k.Name, "orkeys-key-id": cur.ID, "orkeys-team": k.Team}
-	if err := e.Secrets.Put(ctx, st.SecretPath, field, value, meta); err != nil {
-		e.logf("%s: write secret metadata: %v", k.Name, err)
-	}
 	e.emit(st, LevelInfo, EventKeyImported, "key %s (%s) imported from %s; expires %s",
-		short(cur.ID), cur.Name, st.SecretPath, st.ExpiresAt.Format(time.DateOnly))
-	return e.disableIfWanted(ctx, p, k, st)
+		short(cur.ID), cur.Name, src, st.ExpiresAt.Format(time.DateOnly))
+	return errors.Join(e.syncGitHubAndSave(ctx, k, st), e.disableIfWanted(ctx, p, k, st))
 }
 
 // disableIfWanted disables a new or adopted key when its manifest has disabled: true.

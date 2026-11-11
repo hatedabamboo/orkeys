@@ -33,6 +33,7 @@ func (p *Policy) Requested(kind, owner string) bool {
 const (
 	ConsumerESO    = "eso"
 	ConsumerDirect = "direct"
+	ConsumerGitHub = "github"
 )
 
 type Duration struct {
@@ -239,7 +240,7 @@ type Key struct {
 	Disabled    bool       `yaml:"disabled,omitempty"`
 	Budget      Budget     `yaml:"budget"`
 	TTL         Duration   `yaml:"ttl"`
-	Secret      *Secret    `yaml:"secret,omitempty"`
+	Secrets     Secrets    `yaml:"secret,omitempty"`
 	Consumers   []Consumer `yaml:"consumers,omitempty"`
 
 	Team string `yaml:"-"`
@@ -265,12 +266,127 @@ type Secret struct {
 	Field string `yaml:"field,omitempty"`
 }
 
+// Secrets is the list of places in the secrets store that hold the key. In a manifest, secret is
+// one mapping or a list of mappings. orkeys writes the same key to all places.
+type Secrets []Secret
+
+var secretFields = []string{"path", "field"}
+
+func (ss *Secrets) UnmarshalYAML(n *yaml.Node) error {
+	decode := func(v *yaml.Node) (Secret, error) {
+		var s Secret
+		if v.Kind != yaml.MappingNode {
+			return s, fmt.Errorf("line %d: secret: want a mapping with path and field", v.Line)
+		}
+		// Node.Decode does not inherit KnownFields, so check the field names here.
+		for i := 0; i < len(v.Content); i += 2 {
+			if k := v.Content[i]; !slices.Contains(secretFields, k.Value) {
+				return s, fmt.Errorf("line %d: secret: field %s not found (known: %s)", k.Line, k.Value, strings.Join(secretFields, ", "))
+			}
+		}
+		return s, v.Decode(&s)
+	}
+	switch n.Kind {
+	case yaml.MappingNode:
+		s, err := decode(n)
+		if err != nil {
+			return err
+		}
+		*ss = Secrets{s}
+		return nil
+	case yaml.SequenceNode:
+		out := make(Secrets, 0, len(n.Content))
+		for _, item := range n.Content {
+			s, err := decode(item)
+			if err != nil {
+				return err
+			}
+			out = append(out, s)
+		}
+		*ss = out
+		return nil
+	}
+	return fmt.Errorf("line %d: secret: want a mapping or a list", n.Line)
+}
+
 type Consumer struct {
 	Type           string   `yaml:"type"`
 	Cluster        string   `yaml:"cluster"`
 	Namespace      string   `yaml:"namespace"`
 	ExternalSecret string   `yaml:"externalsecret,omitempty"`
 	Restart        []string `yaml:"restart,omitempty"`
+
+	// GitHub Actions secret (type github): Repo or Org, optional Environment (repo only), secret Name.
+	Repo        string `yaml:"repo,omitempty"`
+	Org         string `yaml:"org,omitempty"`
+	Environment string `yaml:"environment,omitempty"`
+	Name        string `yaml:"name,omitempty"`
+	Visibility  string `yaml:"visibility,omitempty"`
+}
+
+// GitHubSecret is one GitHub Actions secret that orkeys writes. Set Org, or Repo (owner/name) with an
+// optional Environment.
+type GitHubSecret struct {
+	Org         string
+	Repo        string
+	Environment string
+	Name        string
+	Visibility  string
+}
+
+// ID is the stable name of the target, stored in the state: org:<org>:<NAME>, repo:<owner/repo>:<NAME>
+// or env:<owner/repo>:<environment>:<NAME>.
+func (g GitHubSecret) ID() string {
+	switch {
+	case g.Org != "":
+		return "org:" + g.Org + ":" + g.Name
+	case g.Environment != "":
+		return "env:" + g.Repo + ":" + g.Environment + ":" + g.Name
+	}
+	return "repo:" + g.Repo + ":" + g.Name
+}
+
+func (g GitHubSecret) String() string { return g.ID() }
+
+// ParseGitHubSecret reads an ID. The secret name is the last field; it cannot contain ':'.
+func ParseGitHubSecret(id string) (GitHubSecret, error) {
+	kind, rest, _ := strings.Cut(id, ":")
+	i := strings.LastIndex(rest, ":")
+	if i <= 0 || i == len(rest)-1 {
+		return GitHubSecret{}, fmt.Errorf("bad github secret id %q", id)
+	}
+	scope, name := rest[:i], rest[i+1:]
+	switch kind {
+	case "org":
+		return GitHubSecret{Org: scope, Name: name}, nil
+	case "repo":
+		return GitHubSecret{Repo: scope, Name: name}, nil
+	case "env":
+		repo, env, ok := strings.Cut(scope, ":")
+		if ok && repo != "" && env != "" {
+			return GitHubSecret{Repo: repo, Environment: env, Name: name}, nil
+		}
+	}
+	return GitHubSecret{}, fmt.Errorf("bad github secret id %q", id)
+}
+
+// GitHubSecrets returns the GitHub Actions secrets of the key's github consumers.
+func (k *Key) GitHubSecrets() []GitHubSecret {
+	var out []GitHubSecret
+	for _, c := range k.Consumers {
+		if c.Type != ConsumerGitHub {
+			continue
+		}
+		g := GitHubSecret{Repo: c.Repo, Environment: c.Environment, Name: c.Name}
+		if c.Org != "" {
+			g = GitHubSecret{Org: c.Org, Name: c.Name, Visibility: c.Visibility}
+			if g.Visibility == "" {
+				g.Visibility = "private"
+			}
+		}
+		out = append(out, g)
+	}
+	return out
 }
 
 func (p *Policy) NamePrefixFor(env, team string) string {
@@ -280,11 +396,19 @@ func (p *Policy) NamePrefixFor(env, team string) string {
 	return strings.NewReplacer("{env}", env, "{team}", team).Replace(*p.NamePrefix)
 }
 
-func (k *Key) SecretField() string {
-	if k.Secret != nil && k.Secret.Field != "" {
-		return k.Secret.Field
+// DefaultSecretField is the secret field of a key when the manifest does not set field.
+const DefaultSecretField = "api_key"
+
+// SecretTargets returns the places of the key in the secrets store, with the default field set.
+func (k *Key) SecretTargets() []Secret {
+	out := make([]Secret, len(k.Secrets))
+	for i, s := range k.Secrets {
+		if s.Field == "" {
+			s.Field = DefaultSecretField
+		}
+		out[i] = s
 	}
-	return "api_key"
+	return out
 }
 
 func (p *Policy) RequestKinds() []string {
