@@ -242,7 +242,7 @@ ttl: 30d
 secret: {path: kv/llm/c}
 consumers:
   - {type: github, repo: a/b, name: X, cluster: c}
-`, "not for type github"},
+`, "consumer type github has no field cluster"},
 		"eso with repo": {"teams/chat-core/prod-chat-core-c.yaml", `
 name: prod-chat-core-c
 kind: production
@@ -255,7 +255,17 @@ ttl: 30d
 secret: {path: kv/llm/c}
 consumers:
   - {type: eso, cluster: a, namespace: b, externalsecret: e, repo: a/b}
-`, "only for type github"},
+`, "consumer type eso has no field repo"},
+		"unknown consumer type": {"teams/chat-core/prod-chat-core-c.yaml", `
+name: prod-chat-core-c
+kind: production
+provider: openrouter
+env: prod
+description: d
+secret: {path: kv/llm/c}
+consumers:
+  - {type: vercel, project: x}
+`, "consumer type \"vercel\": want one of direct, eso, github"},
 		"github duplicate": {"teams/chat-core/prod-chat-core-c.yaml", `
 name: prod-chat-core-c
 kind: production
@@ -307,13 +317,14 @@ secret:
 			if err := os.WriteFile(filepath.Join(root, c.file), []byte(c.body), 0o644); err != nil {
 				t.Fatal(err)
 			}
-			inv, err := Load(root)
-			if err != nil {
-				t.Fatal(err)
-			}
+			// A field that the consumer type does not have fails the load, not the validation.
 			var all []string
-			for _, p := range inv.Validate() {
-				all = append(all, p.String())
+			if inv, err := Load(root); err != nil {
+				all = append(all, err.Error())
+			} else {
+				for _, p := range inv.Validate() {
+					all = append(all, p.String())
+				}
 			}
 			if !strings.Contains(strings.Join(all, "\n"), c.want) {
 				t.Fatalf("want %q in:\n%s", c.want, strings.Join(all, "\n"))
@@ -694,12 +705,13 @@ secret: {path: kv/llm/private}
 
 func TestProvidersProblems(t *testing.T) {
 	cases := map[string]struct{ providers, loadErr, problem string }{
-		"no name":       {"providers:\n  - {kind: openrouter}\n", "name is required", ""},
-		"duplicate":     {"providers:\n  - {name: openrouter}\n  - {name: openrouter}\n", `duplicate name "openrouter"`, ""},
-		"unknown field": {"providers:\n  - {name: openrouter, mgmt_key: x}\n", "field mgmt_key not found", ""},
-		"map name":      {"providers:\n  openrouter: {name: other}\n", "differs from the key", ""},
-		"unknown kind":  {"providers:\n  - {name: openrouter}\n  - {name: deepinfra}\n  - {name: llm, kind: mistral}\n", "", `providers.llm: unknown kind "mistral"`},
-		"bad name":      {"providers:\n  - {name: openrouter}\n  - {name: deepinfra}\n  - {name: Or_2, kind: openrouter}\n", "", "providers.Or_2: name must match"},
+		"no name":        {"providers:\n  - {kind: openrouter}\n", "name is required", ""},
+		"duplicate":      {"providers:\n  - {name: openrouter}\n  - {name: openrouter}\n", `duplicate name "openrouter"`, ""},
+		"unknown field":  {"providers:\n  - {name: openrouter, mgmt_key: x}\n", "field mgmt_key not found", ""},
+		"map name":       {"providers:\n  openrouter: {name: other}\n", "differs from the key", ""},
+		"unknown kind":   {"providers:\n  - {name: openrouter}\n  - {name: deepinfra}\n  - {name: llm, kind: mistral}\n", "", `providers.llm: unknown kind "mistral"`},
+		"bad name":       {"providers:\n  - {name: openrouter}\n  - {name: deepinfra}\n  - {name: Or_2, kind: openrouter}\n", "", "providers.Or_2: name must match"},
+		"unknown option": {"providers:\n  - {name: openrouter, options: {project: x}}\n  - {name: deepinfra}\n", "", "providers.openrouter.options.project: unknown option for openrouter (known: none)"},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {

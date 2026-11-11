@@ -4,10 +4,12 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/hatedabamboo/orkeys/internal/manifest"
 	"github.com/hatedabamboo/orkeys/internal/state"
 )
 
@@ -33,7 +35,7 @@ const prodSecret = "kv/llm/prod/chat-core/dialog#api_key"
 func TestGitHubConsumers(t *testing.T) {
 	v := setup(t)
 	gh := &fakeGitHub{}
-	v.e.GitHub = gh
+	v.e.Pushers = map[string]Pusher{manifest.ConsumerGitHub: GitHubPusher{Secrets: gh}}
 	v.edit(t, prodFile, "restart: [deployment/dialog]\n", "restart: [deployment/dialog]\n"+ghConsumers)
 
 	// Create writes the GitHub secrets at once.
@@ -51,7 +53,7 @@ func TestGitHubConsumers(t *testing.T) {
 		"    environment: prod\n    name: OPENROUTER_API_KEY\n  - {type: github, org: acme, name: DIALOG_KEY}\n")
 	v.edit(t, prodFile, "  - type: github\n    repo: acme/dialog\n    name: OPENROUTER_API_KEY\n", "")
 	p := v.plan(t)
-	if got := types(p); got != "sync-github:"+prodKey || !strings.Contains(p.Actions[0].Detail, "write "+ghOrg) || !strings.Contains(p.Actions[0].Detail, "delete "+ghRepo) {
+	if got := types(p); got != "sync-consumers:"+prodKey || !strings.Contains(p.Actions[0].Detail, "write github/"+ghOrg) || !strings.Contains(p.Actions[0].Detail, "delete github/"+ghRepo) {
 		t.Fatalf("plan: %s %+v", got, p.Actions)
 	}
 	v.apply(t)
@@ -108,16 +110,45 @@ func TestGitHubConsumers(t *testing.T) {
 
 func TestGitHubConsumerWithoutToken(t *testing.T) {
 	v := setup(t)
+	v.e.Pushers = map[string]Pusher{manifest.ConsumerGitHub: Unavailable{Reason: "github consumers: no GitHub token"}}
 	v.edit(t, prodFile, "restart: [deployment/dialog]\n", "restart: [deployment/dialog]\n"+ghConsumers)
-	if err := v.e.Apply(t.Context(), v.plan(t)); err == nil || !strings.Contains(err.Error(), "no GitHub token") {
+	if err := v.e.Apply(t.Context(), v.plan(t), ApplyOptions{}); err == nil || !strings.Contains(err.Error(), "no GitHub token") {
 		t.Fatalf("want token error, got %v", err)
 	}
-	if !v.events.Has(EventGitHubSyncFailed, "no GitHub token") {
+	if !v.events.Has(EventConsumersSyncFailed, "no GitHub token") {
 		t.Fatal("no alert")
 	}
 	// The key exists; the next plan only syncs.
-	v.e.GitHub = &fakeGitHub{}
-	if got := types(v.plan(t)); got != "sync-github:"+prodKey {
+	v.e.Pushers = map[string]Pusher{manifest.ConsumerGitHub: GitHubPusher{Secrets: &fakeGitHub{}}}
+	if got := types(v.plan(t)); got != "sync-consumers:"+prodKey {
 		t.Fatalf("plan: %s", got)
+	}
+}
+
+func TestConsumerTypeWithoutDriver(t *testing.T) {
+	v := setup(t)
+	v.edit(t, prodFile, "restart: [deployment/dialog]\n", "restart: [deployment/dialog]\n"+ghConsumers)
+	if err := v.e.Apply(t.Context(), v.plan(t), ApplyOptions{}); err == nil || !strings.Contains(err.Error(), "consumer type github: no driver configured") {
+		t.Fatalf("want a missing driver error, got %v", err)
+	}
+}
+
+func TestNotifyConsumersInParallel(t *testing.T) {
+	v := setup(t)
+	v.e.NotifyConcurrency = 3
+	v.edit(t, prodFile, "restart: [deployment/dialog]\n", `restart: [deployment/dialog]
+  - {type: direct, cluster: prod-us, namespace: chat, restart: [deployment/a, sts/b]}
+  - {type: eso, cluster: prod-us, namespace: chat, externalsecret: es2}
+`)
+	v.apply(t)
+	v.clk.add(days(85))
+	if err := v.rotate(t, RotateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	slices.Sort(v.kube.calls)
+	want := []string{"restart prod-eu/chat/deployment/dialog", "restart prod-us/chat/deployment/a", "restart prod-us/chat/sts/b",
+		"sync prod-eu/chat/dialog-llm", "sync prod-us/chat/es2"}
+	if !slices.Equal(v.kube.calls, want) {
+		t.Fatalf("kube calls %v", v.kube.calls)
 	}
 }

@@ -155,7 +155,23 @@ func TestOpenAINoProject(t *testing.T) {
 	if _, err := p.List(context.Background()); !errors.Is(err, openai.ErrNoProject) {
 		t.Fatalf("got %v", err)
 	}
-	if p.Disable(context.Background(), "x") == nil || p.SetLimit(context.Background(), "x", nil, "") == nil {
-		t.Fatal("disable and set limit must fail")
+	if _, err := AsDisabler(p); err == nil {
+		t.Fatal("openai must not be a Disabler")
+	}
+	if _, err := AsLimiter(p); err == nil {
+		t.Fatal("openai must not be a Limiter")
+	}
+}
+
+func TestOpenAIProjectOption(t *testing.T) {
+	p, err := New("openai", Config{Key: "k", Workspace: "proj_old", Options: map[string]string{"project": "proj_new"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := p.(*openAI).c.Project(); got != "proj_new" {
+		t.Fatalf("project %q", got)
+	}
+	if _, err := New("openai", Config{Key: "k", Options: map[string]string{"region": "eu"}}); err == nil {
+		t.Fatal("want an error for an unknown option")
 	}
 }

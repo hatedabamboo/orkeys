@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"maps"
 	"os"
 	"slices"
@@ -16,17 +17,6 @@ import (
 	"github.com/hatedabamboo/orkeys/internal/secrets"
 	"github.com/hatedabamboo/orkeys/internal/state"
 )
-
-type Kube interface {
-	ForceSync(ctx context.Context, cluster, namespace, externalSecret string) error
-	Restart(ctx context.Context, cluster, namespace, target string) error
-}
-
-// GitHubSecrets writes GitHub Actions secrets for github consumers.
-type GitHubSecrets interface {
-	Put(ctx context.Context, t manifest.GitHubSecret, value string) error
-	Delete(ctx context.Context, t manifest.GitHubSecret) error
-}
 
 type Deliverer interface {
 	Deliver(ctx context.Context, user, name, secret string) (string, error)
@@ -45,16 +35,45 @@ type Engine struct {
 	Providers provider.Set
 	State     state.Store
 	Secrets   secrets.Store
-	Kube      Kube
-	GitHub    GitHubSecrets
-	Events    EventSink
-	Deliverer Deliverer
-	Org       OrgChecker
-	Now       func() time.Time
-	RunURL    string
-	Log       io.Writer
+	// Pushers and Notifiers are the drivers of the consumer types, by type name.
+	Pushers   map[string]Pusher
+	Notifiers map[string]Notifier
+	// NotifyConcurrency is how many notify consumers of one key run at a time. Default: 1.
+	NotifyConcurrency int
+	Events            EventSink
+	Deliverer         Deliverer
+	Org               OrgChecker
+	Now               func() time.Time
+	RunURL            string
+	// Log gets plain log lines. A non-nil Logger gets structured records in place of Log.
+	Log    io.Writer
+	Logger *slog.Logger
 	// RetryDelay is the base delay between state write attempts. Default: 1s.
 	RetryDelay time.Duration
+	// Guard returns an error when this process must not write state. An example is a lost state lock.
+	// A nil Guard means no check.
+	Guard func() error
+}
+
+// ready returns an error for a missing dependency. The error is clearer than a nil pointer panic.
+func (e *Engine) ready() error {
+	var missing []string
+	if e.Inv == nil {
+		missing = append(missing, "inventory")
+	}
+	if len(e.Providers) == 0 {
+		missing = append(missing, "providers")
+	}
+	if e.State == nil {
+		missing = append(missing, "state store")
+	}
+	if e.Secrets == nil {
+		missing = append(missing, "secrets store")
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("engine: no %s", strings.Join(missing, ", "))
+	}
+	return nil
 }
 
 func (e *Engine) now() time.Time {
@@ -65,6 +84,10 @@ func (e *Engine) now() time.Time {
 }
 
 func (e *Engine) logf(format string, args ...any) {
+	if e.Logger != nil {
+		e.Logger.Info(fmt.Sprintf(format, args...))
+		return
+	}
 	w := e.Log
 	if w == nil {
 		w = os.Stderr
@@ -116,19 +139,60 @@ func copyMeta(dst, src *state.State) {
 	dst.NotifyChannel, dst.AlertChannel = src.NotifyChannel, src.AlertChannel
 }
 
+// cleanupTimeout bounds one compensating action or state write after the run context is cancelled.
+const cleanupTimeout = 30 * time.Second
+
+// detached returns a context that stays valid after ctx is cancelled. Cleanup steps and state writes use it.
+// A SIGTERM in the middle of a change must not leave a provider key without state.
+func detached(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
+}
+
+// putState saves st. It retries twice. It writes also after ctx is cancelled.
+// The state must record each change at the provider.
 func (e *Engine) putState(ctx context.Context, st *state.State) error {
+	if e.Guard != nil {
+		if err := e.Guard(); err != nil {
+			return fmt.Errorf("save state %s (provider key %s): %w", st.Name, st.KeyID, err)
+		}
+	}
+	if err := state.CheckSchema(st); err != nil {
+		return err
+	}
+	st.Schema = state.SchemaVersion
+	dctx, cancel := detached(ctx)
+	defer cancel()
+	d := e.RetryDelay
+	if d == 0 {
+		d = time.Second
+	}
 	var err error
 	for i := 0; i < 3; i++ {
-		if err = e.State.PutState(ctx, st); err == nil {
-			return nil
+		if err = e.State.PutState(dctx, st); err == nil || errors.Is(err, state.ErrConflict) {
+			// A retry does not fix a conflict. Another process has changed the state.
+			break
 		}
-		d := e.RetryDelay
-		if d == 0 {
-			d = time.Second
+		t := time.NewTimer(time.Duration(i+1) * d)
+		select {
+		case <-dctx.Done():
+			t.Stop()
+			return fmt.Errorf("save state %s (provider key %s): %w", st.Name, st.KeyID, errors.Join(err, dctx.Err()))
+		case <-t.C:
 		}
-		time.Sleep(time.Duration(i+1) * d)
 	}
-	return fmt.Errorf("save state %s (provider key %s): %w", st.Name, st.KeyID, err)
+	if err != nil {
+		return fmt.Errorf("save state %s (provider key %s): %w", st.Name, st.KeyID, err)
+	}
+	return nil
+}
+
+// listStates reads all states and refuses states that a newer orkeys wrote.
+func (e *Engine) listStates(ctx context.Context) ([]*state.State, error) {
+	states, err := e.State.ListStates(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return states, state.CheckSchema(states...)
 }
 
 // issue creates a new key for k. With orig set and rotateReason non-empty, the old key of orig
@@ -157,9 +221,11 @@ func (e *Engine) issue(ctx context.Context, k *manifest.Key, orig *state.State, 
 
 	st := e.stateFor(k)
 	st.KeyID, st.CreatedAt, st.ExpiresAt = pk.ID, now, exp
+	st.Phase = state.PhaseIssuing
 	if orig != nil {
-		// The GitHub secrets still hold the old key; the next push replaces them.
-		st.GitHubSecrets = maps.Clone(orig.GitHubSecrets)
+		st.Rev = orig.Rev
+		// The push targets hold the old key. The next push replaces it.
+		st.Pushed = maps.Clone(orig.Pushed)
 		st.PendingRevokes = append([]state.PendingRevoke(nil), orig.PendingRevokes...)
 		if rotateReason != "" {
 			pr := state.PendingRevoke{KeyID: orig.KeyID, Source: state.RevokeRotation, Reason: rotateReason}
@@ -174,21 +240,26 @@ func (e *Engine) issue(ctx context.Context, k *manifest.Key, orig *state.State, 
 	}
 
 	undo := func(cause error) error {
+		dctx, cancel := detached(ctx)
+		defer cancel()
 		errs := []error{cause}
-		if err := p.Delete(ctx, pk.ID); err != nil {
+		if err := p.Delete(dctx, pk.ID); err != nil {
 			errs = append(errs, fmt.Errorf("delete new key %s: %w", pk.ID, err))
 		}
 		if orig != nil {
+			orig.Rev = st.Rev
 			if err := e.putState(ctx, orig); err != nil {
 				errs = append(errs, fmt.Errorf("restore state: %w", err))
 			}
-		} else if err := e.State.DeleteState(ctx, st.Name); err != nil {
+		} else if err := e.State.DeleteState(dctx, st.Name); err != nil {
 			errs = append(errs, fmt.Errorf("delete state: %w", err))
 		}
 		return fmt.Errorf("%s: %w", k.Name, errors.Join(errs...))
 	}
 	if err := e.putState(ctx, st); err != nil {
-		if derr := p.Delete(ctx, pk.ID); derr != nil {
+		dctx, cancel := detached(ctx)
+		defer cancel()
+		if derr := p.Delete(dctx, pk.ID); derr != nil {
 			return nil, fmt.Errorf("%w; delete new key %s also failed: %w", err, pk.ID, derr)
 		}
 		return nil, fmt.Errorf("%w (new key deleted)", err)
@@ -200,13 +271,18 @@ func (e *Engine) issue(ctx context.Context, k *manifest.Key, orig *state.State, 
 	if err := e.writeSecrets(ctx, k, st.Secrets, secret, pk.ID, oldID); err != nil {
 		return nil, undo(err)
 	}
+	st.Phase = state.PhaseReady
+	if err := e.putState(ctx, st); err != nil {
+		// The secrets hold the new key. The next plan or rotate finds the issuing phase and finishes it.
+		return nil, err
+	}
 	e.emit(st, LevelInfo, EventKeyIssued, "new key %s written to %s; expires %s",
 		short(pk.ID), secretList(st.Secrets), exp.Format(time.DateOnly))
 	return st, e.disableIfWanted(ctx, p, k, st)
 }
 
 func secretMeta(k *manifest.Key, keyID string) map[string]string {
-	return map[string]string{"orkeys-key": k.Name, "orkeys-key-id": keyID, "orkeys-team": k.Team}
+	return map[string]string{"orkeys-key": k.Name, secrets.MetaKeyID: keyID, "orkeys-team": k.Team}
 }
 
 func secretList(refs []state.SecretRef) string {
@@ -226,17 +302,19 @@ func (e *Engine) writeSecrets(ctx context.Context, k *manifest.Key, refs []state
 	}
 	var done []prev
 	restore := func(cause error) error {
+		dctx, cancel := detached(ctx)
+		defer cancel()
 		errs := []error{cause}
 		for _, d := range slices.Backward(done) {
 			var err error
 			if d.value == "" {
-				err = e.Secrets.DeleteField(ctx, d.ref.Path, d.ref.Field)
+				err = e.Secrets.DeleteField(dctx, d.ref.Path, d.ref.Field)
 			} else {
 				var meta map[string]string
 				if oldID != "" {
 					meta = secretMeta(k, oldID)
 				}
-				err = e.Secrets.Put(ctx, d.ref.Path, d.ref.Field, d.value, meta)
+				err = e.Secrets.Put(dctx, d.ref.Path, d.ref.Field, d.value, meta)
 			}
 			if err != nil {
 				errs = append(errs, fmt.Errorf("restore secret %s: %w", d.ref, err))

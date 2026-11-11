@@ -28,7 +28,8 @@ func (s *StateStore) writeLock(ctx context.Context, info state.LockInfo, cas int
 	if err != nil {
 		return err
 	}
-	return s.C.WriteCAS(ctx, s.path(lockName), m, cas)
+	_, err = s.C.WriteCAS(ctx, s.path(lockName), m, cas)
+	return err
 }
 
 func (s *StateStore) Acquire(ctx context.Context, info state.LockInfo) error {

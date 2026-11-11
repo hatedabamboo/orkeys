@@ -54,6 +54,13 @@ func (f *fakeVault) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		f.data[full] = in.Data
 		f.versions[full]++
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"version": f.versions[full]}})
+	case kind == "metadata" && r.Method == http.MethodGet:
+		if _, ok := f.data[full]; !ok {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"custom_metadata": f.meta[full]}})
 	case kind == "metadata" && r.Method == http.MethodPost:
 		var in struct {
 			CustomMetadata map[string]string `json:"custom_metadata"`
@@ -71,6 +78,7 @@ func (f *fakeVault) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case kind == "metadata" && r.Method == http.MethodDelete:
 		delete(f.data, full)
 		delete(f.versions, full)
+		delete(f.meta, full)
 	default:
 		w.WriteHeader(http.StatusNotFound)
 	}
@@ -109,6 +117,18 @@ func TestStore(t *testing.T) {
 	}
 	if got, err := sec.Read(ctx, "kv/app/x"); err != nil || got["api_key"] != "sk" {
 		t.Fatalf("read: %v %v", got, err)
+	}
+	if m, err := sec.Meta(ctx, "kv/app/x"); err != nil || m["orkeys-key"] != "prod-a-b" {
+		t.Fatalf("meta: %v %v", m, err)
+	}
+	if m, err := sec.Meta(ctx, "kv/app/none"); err != nil || m != nil {
+		t.Fatalf("meta of a missing secret: %v %v", m, err)
+	}
+	if err := sec.DeleteField(ctx, "kv/app/x", "api_key"); err != nil || f.data["kv/app/x"]["api_key"] != nil || f.data["kv/app/x"]["other"] != "keep" {
+		t.Fatalf("delete field: %v %v", err, f.data["kv/app/x"])
+	}
+	if err := sec.DeleteField(ctx, "kv/app/x", "other"); err != nil || f.data["kv/app/x"] != nil {
+		t.Fatalf("delete of the last field must destroy the secret: %v %v", err, f.data)
 	}
 	if err := s.DeleteState(ctx, "prod-a-b"); err != nil || f.data["kv/orkeys/state/prod-a-b"] != nil {
 		t.Fatal("delete")
@@ -194,3 +214,50 @@ func TestVaultLock(t *testing.T) {
 }
 
 func (f *fakeVault) lockPath() string { return "kv/orkeys/state/.lock" }
+
+func TestStateConflicts(t *testing.T) {
+	f := &fakeVault{data: map[string]map[string]any{}, meta: map[string]map[string]string{}}
+	srv := httptest.NewServer(f)
+	defer srv.Close()
+	s := &StateStore{C: New(srv.URL, "t"), Prefix: "kv/orkeys/state"}
+	ctx := context.Background()
+
+	st := &state.State{Name: "prod-a-b", KeyID: "k1"}
+	if err := s.PutState(ctx, st); err != nil || st.Rev != "1" {
+		t.Fatalf("create: %v rev %q", err, st.Rev)
+	}
+	if err := s.PutState(ctx, &state.State{Name: "prod-a-b", KeyID: "k2"}); !errors.Is(err, state.ErrConflict) {
+		t.Fatalf("second create must conflict: %v", err)
+	}
+	read, _ := s.GetState(ctx, "prod-a-b")
+	st.KeyID = "k3"
+	if err := s.PutState(ctx, st); err != nil || st.Rev != "2" {
+		t.Fatalf("update: %v rev %q", err, st.Rev)
+	}
+	read.KeyID = "stale"
+	if err := s.PutState(ctx, read); !errors.Is(err, state.ErrConflict) {
+		t.Fatalf("write with a stale revision must conflict: %v", err)
+	}
+}
+
+func TestHeartbeats(t *testing.T) {
+	f := &fakeVault{data: map[string]map[string]any{}, meta: map[string]map[string]string{}}
+	srv := httptest.NewServer(f)
+	defer srv.Close()
+	s := &StateStore{C: New(srv.URL, "t"), Prefix: "kv/orkeys/state"}
+	ctx := context.Background()
+	t1 := time.Date(2026, 11, 11, 10, 0, 0, 0, time.UTC)
+	if err := s.PutHeartbeat(ctx, "rotate", t1); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.PutHeartbeat(ctx, "apply", t1.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.Heartbeats(ctx)
+	if err != nil || !got["rotate"].Equal(t1) || !got["apply"].Equal(t1.Add(time.Hour)) {
+		t.Fatalf("heartbeats %v %v", got, err)
+	}
+	if all, _ := s.ListStates(ctx); len(all) != 0 {
+		t.Fatal("heartbeat listed as state")
+	}
+}

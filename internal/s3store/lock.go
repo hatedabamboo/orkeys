@@ -58,7 +58,24 @@ func (s *StateStore) putLock(ctx context.Context, info state.LockInfo, ifMatch, 
 	return err
 }
 
+// acquireAttempts bounds the loop when the lock object disappears between the create and the read.
+const acquireAttempts = 3
+
 func (s *StateStore) Acquire(ctx context.Context, info state.LockInfo) error {
+	for i := 0; ; i++ {
+		err := s.acquire(ctx, info)
+		if !errors.Is(err, errLockGone) {
+			return err
+		}
+		if i == acquireAttempts-1 {
+			return &state.LockedError{Info: state.LockInfo{Holder: "unknown (the lock changes fast)"}}
+		}
+	}
+}
+
+var errLockGone = errors.New("lock object removed during acquire")
+
+func (s *StateStore) acquire(ctx context.Context, info state.LockInfo) error {
 	err := s.putLock(ctx, info, nil, aws.String("*"))
 	if err == nil {
 		return nil
@@ -71,7 +88,7 @@ func (s *StateStore) Acquire(ctx context.Context, info state.LockInfo) error {
 		return err
 	}
 	if cur == nil {
-		return s.Acquire(ctx, info)
+		return errLockGone
 	}
 	if time.Now().Before(cur.Expires) {
 		return &state.LockedError{Info: *cur}

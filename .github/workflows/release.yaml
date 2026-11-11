@@ -71,7 +71,9 @@ jobs:
         run: |
           EXT=""
           [ "$GOOS" = "windows" ] && EXT=".exe"
-          go build -trimpath -ldflags="-s -w -X main.version=$(cat VERSION | tr -d '\n')" -o orkeys-${{ matrix.goos }}-${{ matrix.goarch }}${EXT} .
+          out="orkeys-${{ matrix.goos }}-${{ matrix.goarch }}${EXT}"
+          go build -trimpath -ldflags="-s -w -X main.version=$(cat VERSION | tr -d '\n')" -o "$out" .
+          sha256sum "$out" > "$out.sha256"
 
       - name: Release
         uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3.0.4

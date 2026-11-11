@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -30,13 +31,9 @@ Remove a lock only when no orkeys run holds it. An expired lock is taken over au
 				return err
 			}
 			var f backend.Factory
-			st, err := f.State(cmd.Context(), inv.Policy.State)
+			l, err := f.State(cmd.Context(), inv.Policy.State)
 			if err != nil {
 				return err
-			}
-			l, ok := st.(state.Locker)
-			if !ok {
-				return errors.New("this state store has no lock")
 			}
 			cur, err := l.Current(cmd.Context())
 			if err != nil {
@@ -89,7 +86,10 @@ func (a *app) validateCmd() *cobra.Command {
 }
 
 func (a *app) planCmd() *cobra.Command {
-	var markdown bool
+	var (
+		markdown bool
+		out      string
+	)
 	cmd := &cobra.Command{
 		Use:   "plan",
 		Short: "Show what apply would change",
@@ -103,6 +103,11 @@ func (a *app) planCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if out != "" {
+				if err := writePlanFile(out, plan); err != nil {
+					return err
+				}
+			}
 			switch {
 			case a.output == "json":
 				return printJSON(os.Stdout, plan)
@@ -115,11 +120,43 @@ func (a *app) planCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&markdown, "markdown", false, "write the plan as Markdown (for PR comments)")
+	cmd.Flags().StringVar(&out, "out", "", "also save the plan as JSON to this file, for apply --plan")
 	return cmd
 }
 
+func writePlanFile(path string, plan *engine.Plan) error {
+	f, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	if err := printJSON(f, plan); err != nil {
+		_ = f.Close()
+		return err
+	}
+	return f.Close()
+}
+
+func readPlanFile(path string) (*engine.Plan, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var p engine.Plan
+	if err := json.Unmarshal(b, &p); err != nil {
+		return nil, fmt.Errorf("plan file %s: %w", path, err)
+	}
+	if p.Fingerprint == "" {
+		return nil, fmt.Errorf("plan file %s: no fingerprint; save it with plan --out", path)
+	}
+	return &p, nil
+}
+
 func (a *app) applyCmd() *cobra.Command {
-	var yes bool
+	var (
+		yes      bool
+		opt      engine.ApplyOptions
+		planFile string
+	)
 	cmd := &cobra.Command{
 		Use:   "apply",
 		Short: "Make providers and the secrets store match the inventory",
@@ -127,6 +164,13 @@ func (a *app) applyCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if !yes && (!isTTY() || a.output == "json") {
 				return errors.New("refusing to apply without confirmation: pass --yes")
+			}
+			var saved *engine.Plan
+			if planFile != "" {
+				var err error
+				if saved, err = readPlanFile(planFile); err != nil {
+					return err
+				}
 			}
 			e, err := a.engine(cmd.Context(), "")
 			if err != nil {
@@ -138,6 +182,11 @@ func (a *app) applyCmd() *cobra.Command {
 				if plan, err = e.Plan(ctx); err != nil {
 					return err
 				}
+				if saved != nil {
+					if err := saved.Matches(plan); err != nil {
+						return err
+					}
+				}
 				if a.output != "json" {
 					writePlan(os.Stdout, plan)
 				}
@@ -147,12 +196,14 @@ func (a *app) applyCmd() *cobra.Command {
 				if !yes && !confirm("Apply these changes?") {
 					return errors.New("aborted")
 				}
-				return e.Apply(ctx, plan)
+				return e.Apply(ctx, plan, opt)
 			})
 			return a.finish(map[string]any{"plan": plan}, err)
 		},
 	}
 	cmd.Flags().BoolVarP(&yes, "yes", "y", false, "do not ask for confirmation")
+	cmd.Flags().IntVar(&opt.AllowDeletes, "allow-deletes", 0, "allow this run to revoke up to this many keys (above policy max_deletes)")
+	cmd.Flags().StringVar(&planFile, "plan", "", "apply only if the plan is the same as this file from plan --out")
 	return cmd
 }
 

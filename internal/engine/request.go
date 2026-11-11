@@ -37,6 +37,12 @@ type Issued struct {
 }
 
 func (e *Engine) Request(ctx context.Context, r Request) (*Issued, error) {
+	if err := e.ready(); err != nil {
+		return nil, err
+	}
+	if e.Deliverer == nil {
+		return nil, errors.New("engine: no deliverer for requested keys")
+	}
 	pol := e.Inv.Policy.Kind(r.Kind)
 	if pol == nil || pol.Source != manifest.SourceRequest {
 		return nil, fmt.Errorf("kind %q: want one of %s", r.Kind, strings.Join(e.Inv.Policy.RequestKinds(), ", "))
@@ -70,7 +76,7 @@ func (e *Engine) Request(ctx context.Context, r Request) (*Issued, error) {
 		ttl = r.TTL
 	}
 
-	states, err := e.State.ListStates(ctx)
+	states, err := e.listStates(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -100,12 +106,21 @@ func (e *Engine) Request(ctx context.Context, r Request) (*Issued, error) {
 	if p.Caps().NativeExpiry {
 		spec.ExpiresAt = &exp
 	}
+	// The name has a resolution of one second. A second request in the same second gets the same name.
+	// PutState refuses it, but only after the key exists. This check refuses it first.
+	if prev, err := e.State.GetState(ctx, name); err != nil {
+		return nil, err
+	} else if prev != nil {
+		return nil, fmt.Errorf("key %s exists already; request again", name)
+	}
 	pk, secret, err := p.Create(ctx, spec)
 	if err != nil {
 		return nil, err
 	}
 	undo := func(err error) (*Issued, error) {
-		if derr := p.Delete(ctx, pk.ID); derr != nil {
+		dctx, cancel := detached(ctx)
+		defer cancel()
+		if derr := p.Delete(dctx, pk.ID); derr != nil {
 			return nil, fmt.Errorf("%w; delete new key %s also failed: %w", err, pk.ID, derr)
 		}
 		return nil, fmt.Errorf("%w (new key deleted)", err)
@@ -148,7 +163,10 @@ type IssuedFilter struct {
 }
 
 func (e *Engine) Issued(ctx context.Context, f IssuedFilter) ([]IssuedKey, error) {
-	states, err := e.State.ListStates(ctx)
+	if err := e.ready(); err != nil {
+		return nil, err
+	}
+	states, err := e.listStates(ctx)
 	if err != nil {
 		return nil, err
 	}

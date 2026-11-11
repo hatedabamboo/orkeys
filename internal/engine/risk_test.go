@@ -45,7 +45,7 @@ func TestHygieneBadOrgRevokesNothing(t *testing.T) {
 func TestIssueSecretWriteFails(t *testing.T) {
 	v := setup(t)
 	v.store.failSecret = errors.New("vault sealed")
-	if err := v.e.Apply(context.Background(), v.plan(t)); err == nil {
+	if err := v.e.Apply(context.Background(), v.plan(t), ApplyOptions{}); err == nil {
 		t.Fatal("want error")
 	}
 	if len(v.or.keys) != 0 || len(v.di.keys) != 0 || len(v.store.states) != 0 {
@@ -56,7 +56,7 @@ func TestIssueSecretWriteFails(t *testing.T) {
 func TestIssueStateWriteFails(t *testing.T) {
 	v := setup(t)
 	v.store.failPutState = 100
-	if err := v.e.Apply(context.Background(), v.plan(t)); err == nil {
+	if err := v.e.Apply(context.Background(), v.plan(t), ApplyOptions{}); err == nil {
 		t.Fatal("want error")
 	}
 	if len(v.or.keys) != 0 || len(v.store.secrets) != 0 {
@@ -166,7 +166,7 @@ func TestImportKey(t *testing.T) {
 		}
 	}
 
-	if err := v.e.Apply(ctx, p); err == nil || !strings.Contains(err.Error(), "write the current key to "+secretPath) {
+	if err := v.e.Apply(ctx, p, ApplyOptions{}); err == nil || !strings.Contains(err.Error(), "write the current key to "+secretPath) {
 		t.Fatalf("import without the secret must fail: %v", err)
 	}
 	if _, ok := v.store.states[prodKey]; ok {

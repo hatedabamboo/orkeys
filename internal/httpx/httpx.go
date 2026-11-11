@@ -39,12 +39,15 @@ func StatusOf(err error) int {
 	return 0
 }
 
+// Request is one JSON call.
 type Request struct {
 	Method string
 	URL    string
 	Header http.Header
 	In     any
 	Out    any
+	// ParseError turns an error response into an error. Nil: *Error.
+	ParseError func(status int, body []byte) error
 }
 
 func Do(ctx context.Context, c *http.Client, r Request) error {
@@ -55,6 +58,7 @@ func Do(ctx context.Context, c *http.Client, r Request) error {
 			return fmt.Errorf("encode request: %w", err)
 		}
 	}
+	// Only reads are retried. Writes are not idempotent from our side.
 	attempts := 1
 	if r.Method == http.MethodGet || r.Method == "LIST" {
 		attempts = maxRetries
@@ -87,6 +91,9 @@ func Do(ctx context.Context, c *http.Client, r Request) error {
 		}
 		if resp.StatusCode >= 400 {
 			lastErr = &Error{Status: resp.StatusCode, Body: string(data)}
+			if r.ParseError != nil {
+				lastErr = r.ParseError(resp.StatusCode, data)
+			}
 			if (resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500) && i < attempts-1 {
 				if err := sleep(ctx, retryDelay(resp, i)); err != nil {
 					return err

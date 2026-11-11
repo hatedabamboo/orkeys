@@ -228,18 +228,71 @@ func (c *Client) Write(ctx context.Context, path string, data map[string]any) er
 	return nil
 }
 
-func (c *Client) Patch(ctx context.Context, path string, data map[string]any) error {
-	cur, err := c.Read(ctx, path)
-	if err != nil {
+// casAttempts is how often Patch and Update read and write again after a check-and-set mismatch.
+const casAttempts = 3
+
+// Update reads the secret at path and calls fn with its data. The data is nil when the secret does not exist.
+// fn returns the new data and true, or false when nothing changes. New data of nil deletes the secret.
+// Update writes with check-and-set. A write by another client between the read and the write is not lost.
+func (c *Client) Update(ctx context.Context, path string, fn func(map[string]any) (map[string]any, bool)) error {
+	for i := 0; ; i++ {
+		cur, version, err := c.ReadVersion(ctx, path)
+		if err != nil {
+			return err
+		}
+		next, change := fn(cur)
+		if !change {
+			return nil
+		}
+		if next == nil {
+			if cur == nil {
+				return nil
+			}
+			return c.Destroy(ctx, path)
+		}
+		_, err = c.WriteCAS(ctx, path, next, version)
+		if errors.Is(err, ErrCASMismatch) && i < casAttempts-1 {
+			continue
+		}
 		return err
 	}
-	if cur == nil {
-		cur = map[string]any{}
+}
+
+// Patch sets the fields of data and keeps the other fields of the secret.
+func (c *Client) Patch(ctx context.Context, path string, data map[string]any) error {
+	return c.Update(ctx, path, func(cur map[string]any) (map[string]any, bool) {
+		if cur == nil {
+			cur = map[string]any{}
+		}
+		for k, v := range data {
+			cur[k] = v
+		}
+		return cur, true
+	})
+}
+
+// CustomMetadata returns the custom metadata of a secret, or nil when the secret does not exist.
+func (c *Client) CustomMetadata(ctx context.Context, path string) (map[string]string, error) {
+	mount, rest, err := split(path)
+	if err != nil {
+		return nil, err
 	}
-	for k, v := range data {
-		cur[k] = v
+	var out struct {
+		Data struct {
+			CustomMetadata map[string]string `json:"custom_metadata"`
+		} `json:"data"`
 	}
-	return c.Write(ctx, path, cur)
+	err = c.do(ctx, http.MethodGet, mount+"/metadata/"+rest, nil, &out)
+	if IsNotFound(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("vault metadata %s: %w", path, err)
+	}
+	if out.Data.CustomMetadata == nil {
+		return map[string]string{}, nil
+	}
+	return out.Data.CustomMetadata, nil
 }
 
 func (c *Client) SetCustomMetadata(ctx context.Context, path string, meta map[string]string) error {
@@ -327,18 +380,25 @@ func (c *Client) ReadVersion(ctx context.Context, path string) (map[string]any, 
 	return out.Data.Data, out.Data.Metadata.Version, nil
 }
 
-func (c *Client) WriteCAS(ctx context.Context, path string, data map[string]any, cas int) error {
+// WriteCAS writes data only if the current version of the secret is cas (0: the secret does not exist).
+// It returns the new version.
+func (c *Client) WriteCAS(ctx context.Context, path string, data map[string]any, cas int) (int, error) {
 	mount, rest, err := split(path)
 	if err != nil {
-		return err
+		return 0, err
+	}
+	var out struct {
+		Data struct {
+			Version int `json:"version"`
+		} `json:"data"`
 	}
 	body := map[string]any{"data": data, "options": map[string]any{"cas": cas}}
-	err = c.do(ctx, http.MethodPost, mount+"/data/"+rest, body, nil)
+	err = c.do(ctx, http.MethodPost, mount+"/data/"+rest, body, &out)
 	if httpx.StatusOf(err) == http.StatusBadRequest && strings.Contains(err.Error(), "check-and-set") {
-		return ErrCASMismatch
+		return 0, ErrCASMismatch
 	}
 	if err != nil {
-		return fmt.Errorf("vault write %s: %w", path, err)
+		return 0, fmt.Errorf("vault write %s: %w", path, err)
 	}
-	return nil
+	return out.Data.Version, nil
 }

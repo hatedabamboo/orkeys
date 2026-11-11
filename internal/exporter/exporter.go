@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"os"
 	"slices"
@@ -35,6 +36,7 @@ type Exporter struct {
 	lists    map[string][]provider.Key
 	pollOK   map[string]bool
 	lastPoll map[string]time.Time
+	beats    map[string]time.Time
 }
 
 func (x *Exporter) now() time.Time {
@@ -86,6 +88,17 @@ func (x *Exporter) Poll(ctx context.Context) {
 		x.states, x.stateAt = states, now
 	}
 	x.mu.Unlock()
+
+	if hb, ok := x.Store.(state.Heartbeats); ok {
+		beats, err := hb.Heartbeats(ctx)
+		x.mu.Lock()
+		if err != nil {
+			x.logf("load heartbeats: %v", err)
+		} else {
+			x.beats = beats
+		}
+		x.mu.Unlock()
+	}
 
 	for name, p := range x.Providers {
 		keys, err := p.List(ctx)
@@ -250,6 +263,10 @@ func (x *Exporter) render() []byte {
 		if t, ok := x.lastPoll[n]; ok {
 			w.gauge("orkeys_provider_last_poll_timestamp_seconds", "Time of the last successful poll.", []string{"provider", n}, float64(t.Unix()))
 		}
+	}
+	for _, op := range slices.Sorted(maps.Keys(x.beats)) {
+		w.gauge("orkeys_last_success_timestamp_seconds", "Time of the last successful run of an operation (apply, rotate, hygiene).",
+			[]string{"operation", op}, float64(x.beats[op].Unix()))
 	}
 	if !x.stateAt.IsZero() {
 		w.gauge("orkeys_state_last_load_timestamp_seconds", "Time of the last successful state load.", nil, float64(x.stateAt.Unix()))

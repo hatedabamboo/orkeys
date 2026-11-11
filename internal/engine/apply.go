@@ -12,9 +12,29 @@ import (
 	"github.com/hatedabamboo/orkeys/internal/state"
 )
 
-func (e *Engine) Apply(ctx context.Context, plan *Plan) error {
+// ApplyOptions changes the safety limits of one apply.
+type ApplyOptions struct {
+	// AllowDeletes raises policy max_deletes for this run.
+	AllowDeletes int
+}
+
+// Apply runs the actions of plan in order. It continues after a failed action and returns all errors.
+// It refuses a plan with more deletes than max_deletes or opt.AllowDeletes. The check runs before the first change.
+// A wrong checkout or a loader bug shows every key as removed.
+func (e *Engine) Apply(ctx context.Context, plan *Plan, opt ApplyOptions) error {
+	if err := e.ready(); err != nil {
+		return err
+	}
+	if n, limit := plan.Deletes(), max(e.Inv.Policy.DeleteLimit(), opt.AllowDeletes); n > limit {
+		return fmt.Errorf("plan revokes %d keys, more than the limit %d: check the plan, then run apply --allow-deletes %d", n, limit, n)
+	}
 	var errs []error
-	for _, a := range plan.Actions {
+	for i, a := range plan.Actions {
+		// The check runs between actions. An action that stops halfway leaves more to repair.
+		if err := ctx.Err(); err != nil {
+			errs = append(errs, fmt.Errorf("stopped before %d of %d actions: %w", len(plan.Actions)-i, len(plan.Actions), err))
+			break
+		}
 		e.logf("%s %s: %s", a.Type, a.Name, a.Detail)
 		if err := e.applyOne(ctx, a); err != nil {
 			e.logf("  failed: %v", err)
@@ -31,25 +51,29 @@ func (e *Engine) applyOne(ctx context.Context, a Action) error {
 		if st == nil {
 			return err
 		}
-		return errors.Join(err, e.syncGitHubAndSave(ctx, a.Key, st))
+		return errors.Join(err, e.syncPushAndSave(ctx, a.Key, st))
 
 	case ActImport:
 		return e.adopt(ctx, a.Key, a.Current)
 
-	case ActSyncGitHub:
-		return e.syncGitHubAndSave(ctx, a.Key, a.State)
+	case ActResume:
+		_, err := e.resume(ctx, a.Key, a.State)
+		return err
+
+	case ActSyncConsumers:
+		return e.syncPushAndSave(ctx, a.Key, a.State)
 
 	case ActReissue:
 		_, err := e.startRotation(ctx, a.Key, a.State, "reissue: "+a.Detail)
 		return err
 
 	case ActUpdateLimit:
-		p, err := e.Providers.Get(a.Provider)
+		l, err := e.limiter(a.Provider)
 		if err != nil {
 			return err
 		}
 		limit := a.Key.Budget.Limit
-		if err := p.SetLimit(ctx, a.State.KeyID, &limit, a.Key.Budget.ResetOrDefault()); err != nil {
+		if err := l.SetLimit(ctx, a.State.KeyID, &limit, a.Key.Budget.ResetOrDefault()); err != nil {
 			return err
 		}
 		copyMeta(a.State, e.stateFor(a.Key))
@@ -60,29 +84,28 @@ func (e *Engine) applyOne(ctx context.Context, a Action) error {
 		return e.putState(ctx, a.State)
 
 	case ActDisable:
-		p, err := e.Providers.Get(a.Provider)
+		d, err := e.disabler(a.Provider)
 		if err != nil {
 			return err
 		}
-		if err := p.Disable(ctx, a.State.KeyID); err != nil {
+		if err := d.Disable(ctx, a.State.KeyID); err != nil {
 			return err
 		}
 		e.emit(a.State, LevelInfo, EventKeyDisabled, "key %s disabled: %s", short(a.State.KeyID), a.Detail)
 		return nil
 
 	case ActEnable:
-		p, err := e.Providers.Get(a.Provider)
+		d, err := e.disabler(a.Provider)
 		if err != nil {
 			return err
 		}
-		if err := p.Enable(ctx, a.State.KeyID); err != nil {
-			return err
+		var limit *float64
+		if _, lerr := e.limiter(a.Provider); lerr == nil {
+			v := a.Key.Budget.Limit
+			limit = &v
 		}
-		if p.Caps().PerKeyLimit {
-			limit := a.Key.Budget.Limit
-			if err := p.SetLimit(ctx, a.State.KeyID, &limit, a.Key.Budget.ResetOrDefault()); err != nil {
-				return fmt.Errorf("set limit: %w", err)
-			}
+		if err := d.Enable(ctx, a.State.KeyID, limit, a.Key.Budget.ResetOrDefault()); err != nil {
+			return err
 		}
 		e.emit(a.State, LevelInfo, EventKeyEnabled, "key %s enabled: %s", short(a.State.KeyID), a.Detail)
 		return nil
@@ -94,9 +117,9 @@ func (e *Engine) applyOne(ctx context.Context, a Action) error {
 }
 
 func (e *Engine) remove(ctx context.Context, st *state.State, reason string) error {
-	// Delete the GitHub secrets first: if that fails, nothing is revoked yet and the next run tries again.
-	if len(st.GitHubSecrets) > 0 {
-		err := e.syncGitHub(ctx, nil, st)
+	// The push targets go first. If their delete fails, no key is revoked yet. The next run tries again.
+	if len(st.Pushed) > 0 {
+		err := e.syncPush(ctx, nil, st)
 		if serr := e.putState(ctx, st); serr != nil {
 			err = errors.Join(err, serr)
 		}
@@ -145,9 +168,9 @@ func (e *Engine) adopt(ctx context.Context, k *manifest.Key, cur *provider.Key) 
 	if err != nil {
 		return fmt.Errorf("write the current key to %s#%s first: %w", src.Path, src.Field, err)
 	}
-	if p.Caps().PerKeyLimit {
+	if l, err := provider.AsLimiter(p); err == nil {
 		limit := k.Budget.Limit
-		if err := p.SetLimit(ctx, cur.ID, &limit, k.Budget.ResetOrDefault()); err != nil {
+		if err := l.SetLimit(ctx, cur.ID, &limit, k.Budget.ResetOrDefault()); err != nil {
 			return fmt.Errorf("set limit: %w", err)
 		}
 	}
@@ -167,7 +190,7 @@ func (e *Engine) adopt(ctx context.Context, k *manifest.Key, cur *provider.Key) 
 	}
 	e.emit(st, LevelInfo, EventKeyImported, "key %s (%s) imported from %s; expires %s",
 		short(cur.ID), cur.Name, src, st.ExpiresAt.Format(time.DateOnly))
-	return errors.Join(e.syncGitHubAndSave(ctx, k, st), e.disableIfWanted(ctx, p, k, st))
+	return errors.Join(e.syncPushAndSave(ctx, k, st), e.disableIfWanted(ctx, p, k, st))
 }
 
 // disableIfWanted disables a new or adopted key when its manifest has disabled: true.
@@ -176,9 +199,29 @@ func (e *Engine) disableIfWanted(ctx context.Context, p provider.Provider, k *ma
 	if !k.Disabled {
 		return nil
 	}
-	if err := p.Disable(ctx, st.KeyID); err != nil {
+	d, err := provider.AsDisabler(p)
+	if err != nil {
+		return fmt.Errorf("%s: %w", k.Name, err)
+	}
+	if err := d.Disable(ctx, st.KeyID); err != nil {
 		return fmt.Errorf("%s: disable key %s: %w", k.Name, short(st.KeyID), err)
 	}
 	e.emit(st, LevelInfo, EventKeyDisabled, "key %s disabled: disabled: true in the manifest", short(st.KeyID))
 	return nil
+}
+
+func (e *Engine) limiter(name string) (provider.Limiter, error) {
+	p, err := e.Providers.Get(name)
+	if err != nil {
+		return nil, err
+	}
+	return provider.AsLimiter(p)
+}
+
+func (e *Engine) disabler(name string) (provider.Disabler, error) {
+	p, err := e.Providers.Get(name)
+	if err != nil {
+		return nil, err
+	}
+	return provider.AsDisabler(p)
 }

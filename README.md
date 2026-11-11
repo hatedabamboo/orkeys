@@ -77,6 +77,11 @@ no disabled flag: orkeys creates, rotates and deletes OpenAI keys, and tracks th
 | `exporter`: spend | yes | yes. Spend this month only | yes |
 | `exporter`: hard limit | yes | yes | no. Budget only |
 | `exporter`: last use | yes | no | yes |
+| Old key "still in use" check at revoke | total usage | spend this month | last use (exact), spend this month |
+
+`orkeys keys -p <provider>` lists, creates, limits, disables, enables and deletes keys of any provider in
+`policy.yaml` with the same commands for all providers. It does what all adapters can do; the provider commands
+above show the fields of one API.
 
 ## Provider commands
 
@@ -230,8 +235,8 @@ To start, copy [`examples/inventory`](examples/inventory) and run `orkeys valida
 | Command | What it does |
 |---|---|
 | `orkeys validate` | Check the repository against `policy.yaml` and the rules below. Needs no credentials |
-| `orkeys plan` | Show the changes. `--markdown` for a PR comment, `--json` for scripts |
-| `orkeys apply` | Create, update and revoke keys; write manifest keys to the secrets store. Asks for confirmation; `--yes` in scripts |
+| `orkeys plan` | Show the changes. `--markdown` for a PR comment, `--json` for scripts, `--out <file>` to save the plan for `apply --plan` |
+| `orkeys apply` | Create, update and revoke keys; write manifest keys to the secrets store. Asks for confirmation; `--yes` in scripts. Refuses more than `max_deletes` revokes without `--allow-deletes <n>`. With `--plan <file>`, applies only if the plan is the same as the saved one |
 | `orkeys rotate` | Rotate manifest keys before expiry, sync External Secrets, restart the listed workloads, revoke old keys after the grace period. Expire requested keys. Run it on a schedule (for example hourly) |
 | `orkeys rotate --now <key>` | Rotate a manifest key now |
 | `orkeys rotate --retry <key>` | Retry a failed rotation |
@@ -244,8 +249,27 @@ To start, copy [`examples/inventory`](examples/inventory) and run `orkeys valida
 | `orkeys hygiene` | **Changes keys** unless you pass `--dry-run`: revokes keys of people who left the GitHub org, lists unused keys |
 | `orkeys unlock [id]` | Show the state lock, or remove it by ID after a crashed run |
 | `orkeys exporter` | Serve spend, limits, expiry and rotation state as Prometheus metrics |
+| `orkeys keys -p <provider> list\|create\|set-limit\|disable\|enable\|delete` | Manage keys of one provider of `policy.yaml` directly. Changes no state: `plan` shows keys made here as unmanaged |
 
 Point orkeys at the repository with `--repo` or `ORKEYS_REPO`.
+
+Global flags for inventory commands:
+
+| Flag | Env | Meaning |
+|---|---|---|
+| `--events-file <path>` | `ORKEYS_EVENTS_FILE` | Append each event to the file as one JSON line, at the time of the event. A killed run keeps its events |
+| `--events-webhook <url>` | `ORKEYS_EVENTS_WEBHOOK` | POST each event as JSON to the URL. orkeys tries 3 times. Errors do not show the URL |
+| `--log-format text\|json` | | Progress logs on stderr as plain lines (default) or as JSON records |
+
+#### Apply safety
+
+- `apply` refuses a plan that revokes more than `max_deletes` keys (default 3), before it changes anything. A
+  checkout of the wrong branch or a missing `teams/` directory shows every key as removed. Check the plan, then run
+  `apply --allow-deletes <n>`. `plan` shows a warning for such a plan.
+- `plan --out plan.json` saves the plan with a fingerprint of its actions. `apply --plan plan.json` makes a new plan
+  under the lock and stops if it differs from the saved one, so `apply` does only what the reviewer saw.
+- When the run gets SIGINT or SIGTERM, orkeys starts no new action. The cleanup of a half-done action (delete a new
+  key, restore a secret, save the state) still runs, for at most 30 seconds per step.
 
 ### Repository layout
 
@@ -266,8 +290,9 @@ Unknown fields are errors, so a typo does not pass silently.
 | `providers[]` | | Provider accounts. A list of `{name, kind, ...}`, or a map from name to config. See [Providers](#providers) |
 | `providers[].name` | | Name used in manifests (`provider:`), kinds, state and metrics. Matches `^[a-z][a-z0-9-]*$` |
 | `providers[].kind` | the name | Provider type: `openrouter`, `deepinfra` or `openai` |
-| `providers[].management_key` | | Secret path with field `key` (and optional `self_id`, `workspace`, `base_url`). Optional if `ORKEYS_<NAME>_KEY` is set |
-| `providers[].workspace`, `base_url` | | OpenRouter workspace or OpenAI project ID (required for `openai`); API base URL |
+| `providers[].management_key` | | Secret path with field `key` (and optional `self_id`, `workspace`, `base_url`, and the provider options). Optional if `ORKEYS_<NAME>_KEY` is set |
+| `providers[].workspace`, `base_url` | | OpenRouter workspace or OpenAI project ID; API base URL |
+| `providers[].options` | | Settings of one provider type. `openai`: `project` (the project ID, required here or in `workspace`). Other types have none. Unknown options are errors |
 | `envs` | `[prod, staging, dev]` | Allowed `env` values of manifests |
 | `name_prefix` | `{env}-{team}-` | Required start of key names. `{env}` and `{team}` are replaced. `""` turns the check off |
 | `naming` | `^[a-z0-9][a-z0-9._-]*$` | Regex that every key name must match |
@@ -276,6 +301,7 @@ Unknown fields are errors, so a typo does not pass silently.
 | `github.org` | | Org for owner checks in `hygiene` and for team members from GitHub teams |
 | `github.api_url`, `github.keys_url` | `https://api.github.com`, `https://github.com` | For GitHub Enterprise |
 | `track_disabled` | `false` | `true`: `plan` also enables manifest keys that are disabled at the provider but not in the manifest. See [Disabling a key](#disabling-a-key) |
+| `max_deletes` | `3` | Most keys that one `apply` revokes because their manifests are gone. `apply --allow-deletes <n>` raises it for one run. See [Apply safety](#apply-safety) |
 
 #### Providers
 
@@ -294,7 +320,8 @@ providers:
     management_key: secret/orkeys/providers/deepinfra
   - name: openai
     management_key: secret/orkeys/providers/openai     # an Admin API key
-    workspace: proj_abc123                             # the project that holds the keys
+    options:
+      project: proj_abc123                             # the project that holds the keys
 ```
 
 The map form still works. The map key is the name, and the kind defaults to it:
@@ -413,7 +440,7 @@ service (Alertmanager, a CI step, a bot) can route them.
 | `budget.reset` | no | Limit period: `daily`, `weekly`, `monthly` (DeepInfra: monthly only). Default: the kind `budget.reset` |
 | `ttl` | no | `90d`, `2w`, `24h`. Default and maximum: the kind `ttl`. OpenAI: at most `365d` |
 | `secret.path`, `secret.field` | path: yes | Where the key goes. Vault: `<mount>/<path>`; AWS: secret name. Field default `api_key`. Other fields in the same secret are kept. `secret` is one mapping or a list of mappings: orkeys writes the same key to each place |
-| `consumers[]` | no | `type` (`eso`, `direct` or `github`). For `eso` and `direct`: `cluster`, `namespace`, `externalsecret` (eso), `restart` (`deployment/x`, `statefulset/x`, `daemonset/x`, `cronjob/x`). orkeys restarts only what `restart` lists. For `github`: `repo` (`owner/repo`) or `org`, `environment` (repo only), `name`, `visibility` (org only: `private` (default) or `all`). See [GitHub Actions secrets](#github-actions-secrets) |
+| `consumers[]` | no | `type` (`eso`, `direct` or `github`). For `eso` and `direct`: `cluster`, `namespace`, `externalsecret` (eso), `restart` (`deployment/x`, `statefulset/x`, `daemonset/x`, `cronjob/x`). orkeys restarts only what `restart` lists. For `github`: `repo` (`owner/repo`) or `org`, `environment` (repo only), `name`, `visibility` (org only: `private` (default) or `all`). See [GitHub Actions secrets](#github-actions-secrets). A field of another type is an error |
 | `import.id`, `import.name` | no | Adopt an existing provider key instead of creating one. `name` is its current name at the provider. See below |
 | `disabled` | no | `true` disables the key at the provider and stops its rotation. Default `false`. Not for OpenAI keys. See below |
 
@@ -448,7 +475,7 @@ Limits:
 A `github` consumer is a GitHub Actions secret. orkeys writes the key to it:
 
 - `apply` writes it when it creates or imports the key.
-- `plan` shows `sync-github` when the manifest adds a `github` consumer, or when a write failed before. `apply`
+- `plan` shows `sync-consumers` when the manifest adds a `github` consumer, or when a write failed before. `apply`
   writes the new secrets and deletes the secrets of removed `github` consumers.
 - `rotate` writes the new key during the consumer sync. If a write fails, the rotation fails and the old key stays
   active. Fix the cause, then run `orkeys rotate --retry <key>`.
@@ -546,6 +573,8 @@ orkeys does not send notifications. Commands that change keys (`apply`, `rotate`
 
 - Text mode (default): each event is one line on stdout, for example
   `[alert] rotation_failed prod-search-embeddings: rotation failed: ...`. Progress logs go to stderr.
+- `--events-file` and `--events-webhook` get each event at the time it happens. See the global flags under
+  [Commands](#commands). Use them in CI: a run that is killed prints no JSON document.
 - JSON mode (`-o json` or `--json`): the command prints one JSON document on stdout at the end, also when it fails:
 
 ```json
@@ -579,14 +608,14 @@ The result key depends on the command: `plan` (apply), `issued` (request), `revo
 | `key_revoked` | info | A key was revoked (manifest removed, expired, owner left, `orkeys revoke`) |
 | `key_disabled` | info | A key was disabled (`disabled: true` in the manifest) |
 | `key_enabled` | info | A disabled key was enabled again (`track_disabled: true`) |
-| `rotation_started` | info | A new key was written; consumers sync next |
+| `rotation_started` | info | A new key was written; consumers sync next. Level `alert` when orkeys issued the key because an earlier run stopped before it wrote its key to the secrets |
 | `rotation_synced` | info | Consumers use the new key; the old key will be revoked after `revoke_grace` |
 | `old_key_revoked` | info | The old key of a rotation was revoked |
 | `expiry_notice` | info | A self-service key expires within `notify_before` |
 | `rotation_failed` | alert | A consumer did not sync or restart; the old key stays active |
 | `old_key_in_use` | alert | The old key was used after the switch; it is not revoked |
-| `github_synced` | info | `apply` wrote or deleted GitHub Actions secrets |
-| `github_sync_failed` | alert | A GitHub Actions secret write or delete failed; the next `apply` tries again |
+| `consumers_synced` | info | `apply` wrote or deleted push consumer targets (GitHub Actions secrets) |
+| `consumers_sync_failed` | alert | A push consumer write or delete failed; the next `apply` tries again |
 
 `level` picks `channel`: `info` uses the team's `channels.notifications`, `alert` uses `channels.alerts`.
 `run_url` is set when orkeys runs in GitHub Actions.
@@ -598,13 +627,25 @@ Inventory mode needs two stores:
 - **State** (`state`). One entry per key: provider key ID, expiry, rotation progress, keys waiting for revoke,
   owner and purpose of requested keys. Without it, orkeys cannot link a manifest to a provider key.
   - `vault://<mount>/<path>`: Vault KV v2, one secret per key.
-  - `s3://<bucket>/<prefix>`: one JSON object per key, `<prefix>/<key name>.json`. Turn on bucket versioning to keep
-    history.
+  - `s3://<bucket>/<prefix>`: one JSON object per key, `<prefix>/<key name>.json`.
+  - Each write is conditional: Vault check-and-set on the version, S3 `If-Match` on the ETag (`If-None-Match` for a
+    new key). A write over a state that changed since it was read fails, and orkeys does not retry it.
+  - Each state has a `schema` version. orkeys refuses to run with a state from a newer orkeys: an older build would
+    drop the fields that it does not know. Upgrade all runners (CI and laptops) together.
+  - `.heartbeat` holds the time of the last successful `apply`, `rotate`, `hygiene`, `request` and `revoke`. The
+    exporter shows it as `orkeys_last_success_timestamp_seconds`.
+  - Keep the history: turn on S3 bucket versioning, or keep `max_versions` above 1 on the Vault KV mount. It is the
+    audit trail and the way back after a bad change.
 - **Secrets** (`secrets`). Manifest keys, and by default the provider management keys.
   - `vault`: Vault KV v2. A path is `<mount>/<path>`; fields are secret fields. Manifest keys get custom metadata
-    `orkeys-key`, `orkeys-key-id`, `orkeys-team`.
+    `orkeys-key`, `orkeys-key-id`, `orkeys-team`. Field writes and deletes use check-and-set, so a change by another
+    client between the read and the write is not lost.
   - `aws`: AWS Secrets Manager. A path is the secret name; the value is a JSON object, fields are its keys.
-    Manifest keys get the same tags. A secret deleted by orkeys keeps a 7-day recovery window.
+    Manifest keys get the same tags. A secret deleted by orkeys keeps a 7-day recovery window. When orkeys writes to
+    a secret in that window, it restores the secret and writes only the new field.
+  - `plan` reads `orkeys-key-id` of each place. When a place holds another key than the state, `plan` shows
+    `reissue`: orkeys writes a new key to all places. orkeys writes the value before the metadata, so the metadata
+    always names the key in the field.
 
 S3 and Secrets Manager together let orkeys run with no Vault.
 
@@ -629,8 +670,9 @@ needs read access to the state only.
 | `ORKEYS_GITHUB_SECRETS_TOKEN` | apply, rotate | Writes GitHub Actions secrets for `github` consumers. Default: `GITHUB_TOKEN` |
 
 AWS permissions: `s3:GetObject`, `s3:PutObject`, `s3:DeleteObject` on `<bucket>/<prefix>/*` and `s3:ListBucket` on the
-bucket; `secretsmanager:GetSecretValue`, `CreateSecret`, `PutSecretValue`, `TagResource`, `DeleteSecret` on the
-secrets orkeys reads and writes. The exporter needs only `s3:GetObject`, `s3:ListBucket` and `GetSecretValue`.
+bucket; `secretsmanager:GetSecretValue`, `DescribeSecret`, `CreateSecret`, `PutSecretValue`, `TagResource`, `DeleteSecret`,
+`RestoreSecret` on the secrets orkeys reads and writes. The exporter needs only `s3:GetObject`, `s3:ListBucket` and
+`GetSecretValue`.
 
 ### Locking
 
@@ -645,17 +687,24 @@ backend does with `use_lockfile`:
 
 The lock lives 15 minutes and the holder renews it every 5 minutes. A crashed run's lock expires, and the next run
 takes it over. If the lock is held, a run waits up to `--lock-wait` (default 5m), then fails with the holder, the
-operation and the lock ID. `orkeys unlock` shows the lock; `orkeys unlock <id>` removes it. If a holder loses its lock,
-it stops. `apply` holds the lock across plan, confirmation and apply.
+operation and the lock ID. `orkeys unlock` shows the lock; `orkeys unlock <id>` removes it. `apply` holds the lock
+across plan, confirmation and apply.
+
+If a holder loses its lock, it stops and writes no more state. The lease also counts as lost when renewals fail (a
+store outage) until 2.5 minutes before the lock expires: another run can take an expired lock, so the holder stops
+first. After a failed renewal, orkeys tries again every minute.
 
 Limit: release reads the lock and then deletes it. Neither store has a conditional delete here, so a release that
 races with a takeover of an expired lock can remove the new holder's lock.
 
 ### Rotation
 
-1. When a manifest key is `rotate_before` (3d) from expiry, `rotate` creates a new key, saves the state, and writes
-   the key to all places in `secret`. If a write fails, orkeys puts the old values back in the places it already
-   wrote, deletes the new key and restores the state.
+1. When a manifest key is `rotate_before` (3d) from expiry, `rotate` creates a new key, saves the state with phase
+   `issuing`, writes the key to all places in `secret`, and saves the state again without the phase. If a write
+   fails, orkeys puts the old values back in the places it already wrote, deletes the new key and restores the state.
+   If the run stops between the two state writes, the next `plan` shows `resume`, and the next `apply` or `rotate`
+   finishes the change: it copies the new key from a place that has it, or, when no place has it, issues another key
+   and treats the lost key as an old key.
 2. For each `eso` consumer, it annotates the ExternalSecret with `force-sync` and waits until it is Ready with a newer
    `refreshTime`. Then it runs `kubectl rollout restart` and `rollout status` only for the targets in `restart`. A
    consumer with no `restart` is not restarted: use this for workloads that reload the secret by themselves (a mounted
@@ -665,8 +714,10 @@ races with a takeover of an expired lock can remove the new holder's lock.
 3. 15 minutes after the switch, a `rotate` run records the old key's usage (total usage on OpenRouter, spend this
    month on DeepInfra and OpenAI). OpenAI reports spend with a delay, so use a `revoke_grace` of at least 24h for
    OpenAI keys. After `revoke_grace` (24h), `rotate` compares it again. If the usage grew, a consumer still has
-   the old key: orkeys does not revoke it and marks the rotation as failed. If no run recorded the usage in between,
-   the run at revoke time records it and the next run revokes. Run `rotate` hourly.
+   the old key: orkeys does not revoke it and marks the rotation as failed. For OpenAI keys a last use after the
+   switch also counts, because OpenAI reports it without delay. If the spend went down (a new month started),
+   orkeys records a new baseline and decides on the next run. If no run recorded the usage in between, the run at
+   revoke time records it and the next run revokes. Run `rotate` hourly.
 4. A failed rotation sends an alert and stops. Fix the cause, then run `orkeys rotate --retry <key>`. The old key stays
    active until then.
 
@@ -729,6 +780,10 @@ this rule is the only control of spend: OpenAI does not stop a key at its budget
 | `orkeys_provider_poll_success{provider}` | 1 if the last poll worked |
 | `orkeys_provider_last_poll_timestamp_seconds{provider}` | Last successful poll |
 | `orkeys_state_last_load_timestamp_seconds` | Last successful state load |
+| `orkeys_last_success_timestamp_seconds{operation}` | Last successful `apply`, `rotate`, `hygiene`, `request`, `revoke`. Alert when `rotate` is older than 2h: without it, keys with a native expiry expire at the provider |
+
+The exporter runs all the time with the management keys. Give it its own management keys where the provider allows
+it, and keep them in a secret that only the exporter reads.
 
 ### Containers
 
@@ -740,8 +795,9 @@ contexts are available, for example in CI.
 
 ```sh
 make            # build ./orkeys
-make check      # gofmt check, go vet, tests
+make check      # gofmt check, go vet, tests (GOTEST_FLAGS=-race for the race detector)
 make lint       # golangci-lint
+make vuln       # govulncheck
 make release    # cross-compile into dist/
 make snapshot   # local GoReleaser build, no publish
 make help       # all targets
@@ -755,16 +811,40 @@ Layout:
 | `internal/deepinfra` | HTTP client for DeepInfra API tokens and key limits |
 | `internal/openai` | HTTP client for the OpenAI Admin API: project keys, service accounts, costs |
 | `internal/httpx` | JSON over HTTP with retries for GET |
-| `internal/provider` | common interface and registry of the providers |
-| `internal/manifest` | inventory loading and validation |
+| `internal/nullable` | request fields that are absent, null or set |
+| `internal/provider` | common interface, optional `Limiter` and `Disabler`, and registry of the providers |
+| `internal/provider/providertest` | contract test that every provider adapter passes |
+| `internal/manifest` | inventory loading and validation; consumer types in `consumer.go` |
 | `internal/state`, `internal/secrets` | state and secret store interfaces |
 | `internal/vault`, `internal/s3store`, `internal/awssm`, `internal/backend` | Vault KV v2, S3, Secrets Manager, and the factory that picks them |
-| `internal/engine` | plan, apply, rotate, request, issued, revoke, state listing, hygiene, import, report |
+| `internal/engine` | plan, apply, rotate, request, issued, revoke, state listing, hygiene, import; consumer drivers in `consumers.go`, recovery in `recover.go` |
 | `internal/exporter` | Prometheus metrics |
 | `internal/kube`, `internal/deliver`, `internal/github` | kubectl, age delivery, org membership, Actions secrets |
-| `internal/cli` | cobra commands: `openrouter.go`, `deepinfra.go`, `openai.go`, `inventory.go`, `exporter_cmd.go`; wiring in `wire.go`, output in `render.go` |
+| `internal/cli` | cobra commands: `openrouter.go`, `deepinfra.go`, `openai.go`, `keys.go`, `inventory.go`, `exporter_cmd.go`; wiring in `wire.go`, output in `render.go`, event webhook in `webhook.go` |
 | `examples/inventory` | example inventory repository with rotate and hygiene workflows; a test keeps it valid |
 | `internal/values` | input parsing and formatting |
+
+### Adding a provider
+
+1. Add an HTTP client package (`internal/<name>`) on `internal/httpx`.
+2. Add an adapter in `internal/provider` that implements `Provider`. Implement `Limiter` only if the provider has a
+   per-key limit, and `Disabler` only if it can disable keys. Set `Caps` to match: `New` refuses a mismatch.
+3. Add an `Info` to `registry`: `Options` for settings beyond `base_url` and `workspace`, `CheckScopes` for scopes
+   that orkeys must not request.
+4. Add a fake of the API that keeps keys in memory, and run `providertest.Run` against the adapter (see
+   `internal/provider/conformance_test.go`).
+5. Add the provider to the support tables of this README. A provider command (`orkeys <name> ...`) is optional:
+   `orkeys keys -p <name>` works without one.
+
+### Adding a consumer type
+
+1. Add a spec type in `internal/manifest/consumer.go` with `yaml` tags and a `Validate` method, and add it to
+   `consumerTypes`. A spec that orkeys writes the key to implements `PushSpec` (`TargetID`); a spec that reads the
+   secrets store implements `NotifySpec` (`Workloads`).
+2. Add a driver in `internal/engine` that implements `Pusher` or `Notifier`, and register it in
+   `internal/cli/wire.go`. Push targets are recorded in the state under `<type>/<target ID>`, so orkeys can delete
+   them after the manifest is gone.
+3. Add a row to the key manifest table of this README.
 
 ### Releasing
 
