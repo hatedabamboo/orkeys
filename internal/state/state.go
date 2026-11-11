@@ -2,6 +2,8 @@ package state
 
 import (
 	"context"
+	"encoding/json"
+	"slices"
 	"time"
 )
 
@@ -22,9 +24,8 @@ type PendingRevoke struct {
 	Source string    `json:"source"`
 	Reason string    `json:"reason"`
 	After  time.Time `json:"after"`
-	// Set when the new key went to another secret path: the old field is removed after the revoke.
-	SecretPath  string `json:"secret_path,omitempty"`
-	SecretField string `json:"secret_field,omitempty"`
+	// Set when the new key did not go to some places of the old key: these fields are removed after the revoke.
+	Secrets []SecretRef `json:"secrets,omitempty"`
 	// After CheckFrom, a rotate run records the old key's usage in Baseline. At After, more usage
 	// than Baseline means a consumer still has the old key, so the revoke waits.
 	CheckFrom time.Time `json:"check_from"`
@@ -50,12 +51,77 @@ type State struct {
 	PendingRevokes []PendingRevoke `json:"pending_revokes,omitempty"`
 	ExpiryNotified bool            `json:"expiry_notified,omitempty"`
 
-	LimitUSD      float64 `json:"limit_usd"`
-	LimitReset    string  `json:"limit_reset,omitempty"`
-	SecretPath    string  `json:"secret_path,omitempty"`
-	SecretField   string  `json:"secret_field,omitempty"`
-	NotifyChannel string  `json:"notify_channel,omitempty"`
-	AlertChannel  string  `json:"alert_channel,omitempty"`
+	LimitUSD      float64     `json:"limit_usd"`
+	LimitReset    string      `json:"limit_reset,omitempty"`
+	Secrets       []SecretRef `json:"secrets,omitempty"`
+	NotifyChannel string      `json:"notify_channel,omitempty"`
+	AlertChannel  string      `json:"alert_channel,omitempty"`
+
+	// GitHubSecrets maps a GitHub Actions secret that orkeys wrote (manifest.GitHubSecret ID) to the
+	// provider key ID it holds.
+	GitHubSecrets map[string]string `json:"github_secrets,omitempty"`
+}
+
+// SecretRef is one field of one secret in the secrets store.
+type SecretRef struct {
+	Path  string `json:"path"`
+	Field string `json:"field"`
+}
+
+func (r SecretRef) String() string { return r.Path + "#" + r.Field }
+
+// SameSecrets reports whether a and b hold the same places, in any order.
+func SameSecrets(a, b []SecretRef) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for _, r := range a {
+		if !slices.Contains(b, r) {
+			return false
+		}
+	}
+	return true
+}
+
+// legacySecret is the single secret_path and secret_field of state written before secrets was a list.
+type legacySecret struct {
+	SecretPath  string `json:"secret_path,omitempty"`
+	SecretField string `json:"secret_field,omitempty"`
+}
+
+func (l legacySecret) refs(cur []SecretRef) []SecretRef {
+	if len(cur) > 0 || l.SecretPath == "" {
+		return cur
+	}
+	return []SecretRef{{Path: l.SecretPath, Field: l.SecretField}}
+}
+
+func (s *State) UnmarshalJSON(b []byte) error {
+	type plain State
+	var v struct {
+		plain
+		legacySecret
+	}
+	if err := json.Unmarshal(b, &v); err != nil {
+		return err
+	}
+	*s = State(v.plain)
+	s.Secrets = v.legacySecret.refs(s.Secrets)
+	return nil
+}
+
+func (p *PendingRevoke) UnmarshalJSON(b []byte) error {
+	type plain PendingRevoke
+	var v struct {
+		plain
+		legacySecret
+	}
+	if err := json.Unmarshal(b, &v); err != nil {
+		return err
+	}
+	*p = PendingRevoke(v.plain)
+	p.Secrets = v.legacySecret.refs(p.Secrets)
+	return nil
 }
 
 func (s *State) KnownIDs() []string {

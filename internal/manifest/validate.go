@@ -258,24 +258,46 @@ func validateManifestKey(inv *Inventory, k *Key, kp *KindPolicy, add func(string
 			add(p, "ttl: must be longer than kinds.%s.rotate_before", k.Kind)
 		}
 	}
-	if k.Secret == nil || k.Secret.Path == "" {
+	if len(k.Secrets) == 0 {
 		add(p, "secret.path: required")
-	} else {
-		sp := k.Secret.Path
+	}
+	own := map[string]bool{}
+	for i, sec := range k.SecretTargets() {
+		where := "secret"
+		if len(k.Secrets) > 1 {
+			where = fmt.Sprintf("secret[%d]", i)
+		}
+		sp := sec.Path
+		if sp == "" {
+			add(p, "%s.path: required", where)
+			continue
+		}
 		if pol.Secrets == "vault" && (strings.Count(sp, "/") < 1 || strings.HasPrefix(sp, "/")) {
-			add(p, "secret.path: want <mount>/<path> for Vault")
+			add(p, "%s.path: want <mount>/<path> for Vault", where)
 		}
 		if statePath, ok := strings.CutPrefix(pol.State, "vault://"); ok && pol.Secrets == "vault" &&
 			strings.HasPrefix(sp+"/", strings.Trim(statePath, "/")+"/") {
-			add(p, "secret.path: must not be under the state path %s", statePath)
+			add(p, "%s.path: must not be under the state path %s", where, statePath)
 		}
-		if prev, ok := secretPaths[sp]; ok {
-			add(p, "secret.path: already used by %s", prev)
+		if own[sp+"#"+sec.Field] {
+			add(p, "%s: %s#%s is listed twice", where, sp, sec.Field)
+			continue
+		}
+		own[sp+"#"+sec.Field] = true
+		if prev, ok := secretPaths[sp]; ok && prev != k.Name {
+			add(p, "%s.path: already used by %s", where, prev)
 		}
 		secretPaths[sp] = k.Name
 	}
 	for i, c := range k.Consumers {
 		where := fmt.Sprintf("consumers[%d]", i)
+		if c.Type == ConsumerGitHub {
+			validateGitHubConsumer(k, c, where, add, secretPaths)
+			continue
+		}
+		if c.Repo != "" || c.Org != "" || c.Environment != "" || c.Name != "" || c.Visibility != "" {
+			add(p, "%s: repo, org, environment, name and visibility are only for type github", where)
+		}
 		switch c.Type {
 		case ConsumerESO:
 			if c.ExternalSecret == "" {
@@ -286,7 +308,7 @@ func validateManifestKey(inv *Inventory, k *Key, kp *KindPolicy, add func(string
 				add(p, "%s.externalsecret: only for type eso", where)
 			}
 		default:
-			add(p, "%s.type: want eso or direct", where)
+			add(p, "%s.type: want eso, direct or github", where)
 		}
 		if c.Cluster == "" || c.Namespace == "" {
 			add(p, "%s: cluster and namespace are required", where)
@@ -298,4 +320,54 @@ func validateManifestKey(inv *Inventory, k *Key, kp *KindPolicy, add func(string
 			}
 		}
 	}
+}
+
+var (
+	githubSecretName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+	githubRepo       = regexp.MustCompile(`^[A-Za-z0-9-]+/[A-Za-z0-9._-]+$`)
+	githubOrg        = regexp.MustCompile(`^[A-Za-z0-9-]+$`)
+)
+
+func validateGitHubConsumer(k *Key, c Consumer, where string, add func(string, string, ...any), seen map[string]string) {
+	p := k.Path
+	if c.Cluster != "" || c.Namespace != "" || c.ExternalSecret != "" || len(c.Restart) > 0 {
+		add(p, "%s: cluster, namespace, externalsecret and restart are not for type github", where)
+	}
+	switch {
+	case c.Name == "":
+		add(p, "%s.name: required for type github", where)
+	case !githubSecretName.MatchString(c.Name) || strings.HasPrefix(strings.ToUpper(c.Name), "GITHUB_"):
+		add(p, "%s.name: %q is not a valid GitHub secret name (letters, digits, _; no GITHUB_ prefix)", where, c.Name)
+	}
+	switch {
+	case (c.Repo == "") == (c.Org == ""):
+		add(p, "%s: set exactly one of repo or org", where)
+	case c.Repo != "" && !githubRepo.MatchString(c.Repo):
+		add(p, "%s.repo: want <owner>/<repo>", where)
+	case c.Org != "" && !githubOrg.MatchString(c.Org):
+		add(p, "%s.org: %q is not a GitHub org name", where, c.Org)
+	}
+	if c.Environment != "" && c.Repo == "" {
+		add(p, "%s.environment: only with repo", where)
+	}
+	if strings.Contains(c.Environment, ":") {
+		add(p, "%s.environment: must not contain ':'", where)
+	}
+	if c.Visibility != "" {
+		if c.Org == "" {
+			add(p, "%s.visibility: only with org", where)
+		} else if c.Visibility != "all" && c.Visibility != "private" {
+			add(p, "%s.visibility: want all or private", where)
+		}
+	}
+	if c.Name == "" || (c.Repo == "") == (c.Org == "") {
+		return
+	}
+	g := GitHubSecret{Org: c.Org, Repo: c.Repo, Environment: c.Environment, Name: c.Name}
+	// GitHub secret names are case-insensitive.
+	id := "github:" + strings.ToLower(g.ID())
+	if prev, ok := seen[id]; ok {
+		add(p, "%s: GitHub secret %s is already written by %s", where, g.ID(), prev)
+	}
+	seen[id] = k.Name
 }

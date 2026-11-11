@@ -25,6 +25,7 @@ const (
 	ActDisable     ActionType = "disable"
 	ActEnable      ActionType = "enable"
 	ActDelete      ActionType = "delete"
+	ActSyncGitHub  ActionType = "sync-github"
 )
 
 type Action struct {
@@ -115,8 +116,8 @@ func (e *Engine) Plan(ctx context.Context) (*Plan, error) {
 			continue
 		}
 		want := e.stateFor(k)
-		if want.SecretPath != st.SecretPath || want.SecretField != st.SecretField {
-			act.Type, act.Detail = ActReissue, fmt.Sprintf("secret moved %s#%s -> %s#%s", st.SecretPath, st.SecretField, want.SecretPath, want.SecretField)
+		if !state.SameSecrets(want.Secrets, st.Secrets) {
+			act.Type, act.Detail = ActReissue, fmt.Sprintf("secret moved %s -> %s", secretList(st.Secrets), secretList(want.Secrets))
 			plan.Actions = append(plan.Actions, act)
 			continue
 		}
@@ -153,6 +154,12 @@ func (e *Engine) Plan(ctx context.Context) (*Plan, error) {
 		if d := metaDiff(st, want); d != "" {
 			a := act
 			a.Type, a.Detail = ActUpdateState, d
+			plan.Actions = append(plan.Actions, a)
+		}
+		// During a rotation, rotate writes the GitHub secrets.
+		if push, drop := githubDiff(k, st); st.Rotation == state.RotationIdle && len(push)+len(drop) > 0 {
+			a := act
+			a.Type, a.Detail = ActSyncGitHub, githubDetail(push, drop)
 			plan.Actions = append(plan.Actions, a)
 		}
 	}

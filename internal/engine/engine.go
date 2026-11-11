@@ -5,8 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/hatedabamboo/orkeys/internal/manifest"
@@ -18,6 +20,12 @@ import (
 type Kube interface {
 	ForceSync(ctx context.Context, cluster, namespace, externalSecret string) error
 	Restart(ctx context.Context, cluster, namespace, target string) error
+}
+
+// GitHubSecrets writes GitHub Actions secrets for github consumers.
+type GitHubSecrets interface {
+	Put(ctx context.Context, t manifest.GitHubSecret, value string) error
+	Delete(ctx context.Context, t manifest.GitHubSecret) error
 }
 
 type Deliverer interface {
@@ -38,6 +46,7 @@ type Engine struct {
 	State     state.Store
 	Secrets   secrets.Store
 	Kube      Kube
+	GitHub    GitHubSecrets
 	Events    EventSink
 	Deliverer Deliverer
 	Org       OrgChecker
@@ -91,9 +100,8 @@ func (e *Engine) stateFor(k *manifest.Key) *state.State {
 		LimitUSD:   k.Budget.Limit,
 		LimitReset: k.Budget.ResetOrDefault(),
 	}
-	if k.Secret != nil {
-		st.SecretPath = k.Secret.Path
-		st.SecretField = k.SecretField()
+	for _, sec := range k.SecretTargets() {
+		st.Secrets = append(st.Secrets, state.SecretRef{Path: sec.Path, Field: sec.Field})
 	}
 	if t := e.Inv.Teams[k.Team]; t != nil {
 		st.NotifyChannel = t.Channels.Notifications
@@ -150,11 +158,15 @@ func (e *Engine) issue(ctx context.Context, k *manifest.Key, orig *state.State, 
 	st := e.stateFor(k)
 	st.KeyID, st.CreatedAt, st.ExpiresAt = pk.ID, now, exp
 	if orig != nil {
+		// The GitHub secrets still hold the old key; the next push replaces them.
+		st.GitHubSecrets = maps.Clone(orig.GitHubSecrets)
 		st.PendingRevokes = append([]state.PendingRevoke(nil), orig.PendingRevokes...)
 		if rotateReason != "" {
 			pr := state.PendingRevoke{KeyID: orig.KeyID, Source: state.RevokeRotation, Reason: rotateReason}
-			if orig.SecretPath != st.SecretPath || orig.SecretField != st.SecretField {
-				pr.SecretPath, pr.SecretField = orig.SecretPath, orig.SecretField
+			for _, r := range orig.Secrets {
+				if !slices.Contains(st.Secrets, r) {
+					pr.Secrets = append(pr.Secrets, r)
+				}
 			}
 			st.PendingRevokes = append(st.PendingRevokes, pr)
 			st.Rotation = state.RotationPending
@@ -181,13 +193,77 @@ func (e *Engine) issue(ctx context.Context, k *manifest.Key, orig *state.State, 
 		}
 		return nil, fmt.Errorf("%w (new key deleted)", err)
 	}
-	meta := map[string]string{"orkeys-key": k.Name, "orkeys-key-id": pk.ID, "orkeys-team": k.Team}
-	if err := e.Secrets.Put(ctx, st.SecretPath, st.SecretField, secret, meta); err != nil {
-		return nil, undo(fmt.Errorf("write secret: %w", err))
+	oldID := ""
+	if orig != nil {
+		oldID = orig.KeyID
+	}
+	if err := e.writeSecrets(ctx, k, st.Secrets, secret, pk.ID, oldID); err != nil {
+		return nil, undo(err)
 	}
 	e.emit(st, LevelInfo, EventKeyIssued, "new key %s written to %s; expires %s",
-		short(pk.ID), st.SecretPath, exp.Format(time.DateOnly))
+		short(pk.ID), secretList(st.Secrets), exp.Format(time.DateOnly))
 	return st, e.disableIfWanted(ctx, p, k, st)
+}
+
+func secretMeta(k *manifest.Key, keyID string) map[string]string {
+	return map[string]string{"orkeys-key": k.Name, "orkeys-key-id": keyID, "orkeys-team": k.Team}
+}
+
+func secretList(refs []state.SecretRef) string {
+	out := make([]string, len(refs))
+	for i, r := range refs {
+		out[i] = r.String()
+	}
+	return strings.Join(out, ", ")
+}
+
+// writeSecrets writes the key value to all places in refs. If a write fails, it puts back the values
+// it replaced (with the metadata of oldID) and removes the fields it added, so all places keep the same key.
+func (e *Engine) writeSecrets(ctx context.Context, k *manifest.Key, refs []state.SecretRef, value, keyID, oldID string) error {
+	type prev struct {
+		ref   state.SecretRef
+		value string
+	}
+	var done []prev
+	restore := func(cause error) error {
+		errs := []error{cause}
+		for _, d := range slices.Backward(done) {
+			var err error
+			if d.value == "" {
+				err = e.Secrets.DeleteField(ctx, d.ref.Path, d.ref.Field)
+			} else {
+				var meta map[string]string
+				if oldID != "" {
+					meta = secretMeta(k, oldID)
+				}
+				err = e.Secrets.Put(ctx, d.ref.Path, d.ref.Field, d.value, meta)
+			}
+			if err != nil {
+				errs = append(errs, fmt.Errorf("restore secret %s: %w", d.ref, err))
+			}
+		}
+		return errors.Join(errs...)
+	}
+	for _, r := range refs {
+		data, err := e.Secrets.Read(ctx, r.Path)
+		if err != nil {
+			return restore(fmt.Errorf("read secret %s: %w", r, err))
+		}
+		if err := e.Secrets.Put(ctx, r.Path, r.Field, value, secretMeta(k, keyID)); err != nil {
+			return restore(fmt.Errorf("write secret %s: %w", r, err))
+		}
+		done = append(done, prev{ref: r, value: data[r.Field]})
+	}
+	return nil
+}
+
+// readSecret reads the current key value from the first place of st.
+func (e *Engine) readSecret(ctx context.Context, st *state.State) (string, error) {
+	if len(st.Secrets) == 0 {
+		return "", fmt.Errorf("%s: no secret in state", st.Name)
+	}
+	r := st.Secrets[0]
+	return secrets.ReadField(ctx, e.Secrets, r.Path, r.Field)
 }
 
 func (e *Engine) revoke(ctx context.Context, providerName, id string) error {

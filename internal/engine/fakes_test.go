@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/hatedabamboo/orkeys/internal/manifest"
 	"github.com/hatedabamboo/orkeys/internal/provider"
 	"github.com/hatedabamboo/orkeys/internal/state"
 )
@@ -78,6 +79,7 @@ type fakeStore struct {
 	secrets      map[string]string
 	failPutState int
 	failSecret   error
+	failPath     string // Put to this path fails
 }
 
 func newStore() *fakeStore {
@@ -126,6 +128,9 @@ func (s *fakeStore) DeleteState(_ context.Context, n string) error {
 func (s *fakeStore) Put(_ context.Context, path, field, value string, _ map[string]string) error {
 	if s.failSecret != nil {
 		return s.failSecret
+	}
+	if path == s.failPath {
+		return errors.New("secret store down for " + path)
 	}
 	s.secrets[path+"#"+field] = value
 	return nil
@@ -215,4 +220,28 @@ func (s *fakeStore) Read(_ context.Context, path string) (map[string]string, err
 		}
 	}
 	return out, nil
+}
+
+type fakeGitHub struct {
+	secrets map[string]string // GitHubSecret ID -> value
+	fail    error
+}
+
+func (g *fakeGitHub) Put(_ context.Context, t manifest.GitHubSecret, value string) error {
+	if g.fail != nil {
+		return g.fail
+	}
+	if g.secrets == nil {
+		g.secrets = map[string]string{}
+	}
+	g.secrets[t.ID()] = value
+	return nil
+}
+
+func (g *fakeGitHub) Delete(_ context.Context, t manifest.GitHubSecret) error {
+	if g.fail != nil {
+		return g.fail
+	}
+	delete(g.secrets, t.ID())
+	return nil
 }
