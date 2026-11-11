@@ -61,7 +61,7 @@ func (s *Secrets) do(ctx context.Context, method, path string, body any) (int, [
 	if err != nil {
 		return 0, nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	b, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	return resp.StatusCode, b, err
 }

@@ -673,7 +673,7 @@ func TestProvidersProblems(t *testing.T) {
 	cases := map[string]struct{ providers, loadErr, problem string }{
 		"no name":       {"providers:\n  - {kind: openrouter}\n", "name is required", ""},
 		"duplicate":     {"providers:\n  - {name: openrouter}\n  - {name: openrouter}\n", `duplicate name "openrouter"`, ""},
-		"unknown field": {"providers:\n  - {name: openrouter, managment_key: x}\n", "field managment_key not found", ""},
+		"unknown field": {"providers:\n  - {name: openrouter, mgmt_key: x}\n", "field mgmt_key not found", ""},
 		"map name":      {"providers:\n  openrouter: {name: other}\n", "differs from the key", ""},
 		"unknown kind":  {"providers:\n  - {name: openrouter}\n  - {name: deepinfra}\n  - {name: llm, kind: openai}\n", "", `providers.llm: unknown kind "openai"`},
 		"bad name":      {"providers:\n  - {name: openrouter}\n  - {name: deepinfra}\n  - {name: Or_2, kind: openrouter}\n", "", "providers.Or_2: name must match"},

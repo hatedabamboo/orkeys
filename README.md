@@ -152,6 +152,8 @@ To start, copy [`examples/inventory`](examples/inventory) and run `orkeys valida
 | `orkeys rotate --only <key>` | Process only these keys |
 | `orkeys request --user <login> --kind <kind> --provider <name> --purpose <text>` | Issue a key of a kind with `source: request`, encrypted to the user's GitHub SSH keys. Optional `--limit` and `--ttl`, up to the kind maximum |
 | `orkeys issued` | List active requested keys with owner, purpose, spend and expiry. Filters: `--team`, `--owner`, `--kind`. `--markdown` for a table |
+| `orkeys revoke <name>...` | **Revokes keys.** Revoke requested keys before they expire: deletes the provider key, the secret fields and the GitHub secrets, and removes the state. Optional `--reason`. Asks for confirmation; `--yes` in scripts |
+| `orkeys state [name]` | List the keys in the state store with source, owner, key ID, limit, expiry and rotation. Filters: `--team`, `--kind`, `--owner`, `--provider`, `--source`. With a name, print that state entry as JSON. Needs no management keys |
 | `orkeys import` | Print a manifest with an `import` block for each provider key that orkeys does not manage |
 | `orkeys hygiene` | **Changes keys** unless you pass `--dry-run`: revokes keys of people who left the GitHub org, lists unused keys |
 | `orkeys unlock [id]` | Show the state lock, or remove it by ID after a crashed run |
@@ -449,7 +451,7 @@ delete it.
 
 ### Output and events
 
-orkeys does not send notifications. Commands that change keys (`apply`, `rotate`, `request`, `hygiene`) emit
+orkeys does not send notifications. Commands that change keys (`apply`, `rotate`, `request`, `revoke`, `hygiene`) emit
 **events**, and you route them with the tool you already have.
 
 - Text mode (default): each event is one line on stdout, for example
@@ -477,14 +479,14 @@ orkeys does not send notifications. Commands that change keys (`apply`, `rotate`
 }
 ```
 
-The result key depends on the command: `plan` (apply), `issued` (request), `findings` (hygiene); `rotate` has only
-`events`. `apply -o json` needs `--yes`. The exit code is 1 when `error` is set.
+The result key depends on the command: `plan` (apply), `issued` (request), `revoked` (revoke), `findings` (hygiene);
+`rotate` has only `events`. `apply -o json` and `revoke -o json` need `--yes`. The exit code is 1 when `error` is set.
 
 | Event `type` | Level | When |
 |---|---|---|
 | `key_issued` | info | A key was created |
 | `key_imported` | info | An existing provider key was adopted |
-| `key_revoked` | info | A key was revoked (manifest removed, expired, owner left) |
+| `key_revoked` | info | A key was revoked (manifest removed, expired, owner left, `orkeys revoke`) |
 | `key_disabled` | info | A key was disabled (`disabled: true` in the manifest) |
 | `key_enabled` | info | A disabled key was enabled again (`track_disabled: true`) |
 | `rotation_started` | info | A new key was written; consumers sync next |
@@ -518,9 +520,10 @@ S3 and Secrets Manager together let orkeys run with no Vault.
 
 | Works without stores | Needs the stores |
 |---|---|
-| `validate`, and the provider commands (`orkeys or ...`, `orkeys di ...`) | `plan`, `apply`, `rotate`, `request`, `issued`, `import`, `hygiene`, `unlock`, `exporter` |
+| `validate`, and the provider commands (`orkeys or ...`, `orkeys di ...`) | `plan`, `apply`, `rotate`, `request`, `issued`, `revoke`, `state`, `import`, `hygiene`, `unlock`, `exporter` |
 
-Read-only commands (`plan`, `issued`, `import`) need read access to the state and to the management keys.
+Read-only commands (`plan`, `issued`, `import`) need read access to the state and to the management keys. `state`
+needs read access to the state only.
 
 ### Credentials
 
@@ -541,7 +544,7 @@ secrets orkeys reads and writes. The exporter needs only `s3:GetObject`, `s3:Lis
 
 ### Locking
 
-`apply`, `rotate`, `request` and `hygiene` (without `--dry-run`) hold a lock on the state, the same way Terraform's S3
+`apply`, `rotate`, `request`, `revoke` and `hygiene` (without `--dry-run`) hold a lock on the state, the same way Terraform's S3
 backend does with `use_lockfile`:
 
 - **S3:** orkeys creates `<prefix>/.lock` with a conditional write (`If-None-Match: *`). A second writer gets
@@ -584,6 +587,11 @@ Keys of a kind with `source: request` have no manifest. A team member requests o
 kind limits per person and keeps owner, team and purpose in the state. Alerts go to the team
 `channels.notifications`. At expiry, `rotate` revokes the key and deletes its state; there is no renewal. If the kind has
 `notify_before`, orkeys emits `expiry_notice` that long before expiry.
+
+To revoke a requested key before expiry, run `orkeys revoke <name>`. Get the name from `orkeys issued`. Do not use
+`orkeys or delete` for this: it deletes the provider key and keeps the state, and the key still counts against
+`max_active` and `max_total_limit` until it expires. If the provider key is already deleted, `orkeys revoke` removes the
+state. `orkeys revoke` refuses manifest keys: delete the manifest or set `disabled: true`.
 
 orkeys finds the team of `--user` in `members` or in the GitHub team. If the user is in more than one team, `request`
 fails and lists the teams: give one with `--team <name>`. With `--team`, orkeys checks only that team. A missing
@@ -657,7 +665,7 @@ Layout:
 | `internal/manifest` | inventory loading and validation |
 | `internal/state`, `internal/secrets` | state and secret store interfaces |
 | `internal/vault`, `internal/s3store`, `internal/awssm`, `internal/backend` | Vault KV v2, S3, Secrets Manager, and the factory that picks them |
-| `internal/engine` | plan, apply, rotate, request, issued, hygiene, import, report |
+| `internal/engine` | plan, apply, rotate, request, issued, revoke, state listing, hygiene, import, report |
 | `internal/exporter` | Prometheus metrics |
 | `internal/kube`, `internal/deliver`, `internal/github` | kubectl, age delivery, org membership, Actions secrets |
 | `internal/cli` | cobra commands: `openrouter.go`, `deepinfra.go`, `inventory.go`, `exporter_cmd.go`; wiring in `wire.go`, output in `render.go` |

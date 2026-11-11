@@ -123,3 +123,32 @@ func yamlString(s string) string {
 	}
 	return strings.TrimSuffix(string(b), "\n")
 }
+
+func writeTracked(w io.Writer, keys []engine.TrackedKey) {
+	if len(keys) == 0 {
+		fmt.Fprintln(w, "No keys in state.")
+		return
+	}
+	dash := func(s string) string {
+		if s == "" {
+			return "-"
+		}
+		return s
+	}
+	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(tw, "NAME\tSOURCE\tTEAM\tKIND\tPROVIDER\tOWNER\tKEY ID\tLIMIT\tCREATED\tEXPIRES\tROTATION\tOLD KEYS")
+	for _, k := range keys {
+		rot := string(k.Rotation)
+		if rot == "" {
+			rot = "idle"
+		}
+		id := k.KeyID
+		if len(id) > 12 {
+			id = id[:12]
+		}
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t$%.2f %s\t%s\t%s\t%s\t%d\n", k.Name, k.Source, k.Team, k.Kind, k.Provider,
+			dash(k.Owner), dash(id), k.LimitUSD, k.LimitReset, k.CreatedAt.Format(time.DateOnly), k.ExpiresAt.Format(time.DateOnly),
+			rot, len(k.PendingRevokes))
+	}
+	_ = tw.Flush()
+}

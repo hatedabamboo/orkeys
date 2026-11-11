@@ -1,5 +1,14 @@
 # CHANGELOG
 
+## v0.2.6 (2026-11-11)
+
+- (feat) `orkeys revoke <name>...` revokes requested keys before they expire: it deletes the provider key, the secret
+  fields and the GitHub secrets, and removes the state. It refuses manifest keys. If the provider key is already
+  deleted, it removes the state. Optional `--reason`; `--yes` in scripts (#21)
+- (feat) `orkeys state [name]` lists the keys in the state store with source (`manifest`, `request`, `orphan`), owner,
+  key ID, limit, expiry and rotation. Filters: `--team`, `--kind`, `--owner`, `--provider`, `--source`. With a name,
+  it prints that state entry as JSON. It needs no management keys (#20)
+
 ## v0.2.5 (2026-11-11)
 
 - (feat) `github` consumer type: orkeys writes the key to a GitHub Actions secret (repository, environment or
