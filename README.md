@@ -28,6 +28,52 @@ git clone https://github.com/hatedabamboo/orkeys && cd orkeys
 make install
 ```
 
+## Provider support
+
+OpenRouter has full support. DeepInfra is read only: DeepInfra does not let an API key create, limit, disable or
+delete tokens (see [DeepInfra](#deepinfra)). Each write to DeepInfra fails with `401`.
+
+### Support in provider commands
+
+| Feature | OpenRouter (`or`) | DeepInfra (`di`) |
+|---|---|---|
+| List keys (`list`) | yes | yes. No scopes and no creation time |
+| Show one key (`get`) | yes | yes |
+| Create a key (`create`) | yes | no |
+| Change the limit (`update --limit`) | yes | no |
+| Limit period (`--limit-reset`) | `daily`, `weekly`, `monthly` | `monthly` only |
+| Expiry (`--expires`) | yes | no |
+| Rename (`update --name`) | yes | no |
+| Change scopes (`update --scopes`) | no scopes | no |
+| List possible scopes (`scopes`) | no scopes | yes |
+| Disable a key (`disable`) | yes | no |
+| Enable a key (`enable`) | yes | no command |
+| Delete a key (`delete`) | yes | no |
+| Workspaces (`--workspace`) | yes | no |
+| Spend shown | day, week, month, total | month |
+| Last use shown | yes | no |
+
+### Support in inventory mode
+
+| Feature | OpenRouter | DeepInfra |
+|---|---|---|
+| `validate`, `state` | yes | yes |
+| `plan` | yes | yes |
+| `apply`: create a key | yes | no |
+| `apply`: set the limit | yes | no |
+| `apply`: `disabled: true` | yes. Sets the disabled flag | no |
+| `apply`: revoke a deleted manifest | yes | no |
+| `budget.reset` | `daily`, `weekly`, `monthly` | `monthly` only |
+| `scopes` field | no | yes. Used only at create |
+| `rotate` | yes. The key also has a native expiry | no |
+| `request`, `revoke` | yes | no |
+| `import`: print manifests | yes | yes |
+| `apply`: adopt an `import` key | yes | no |
+| `hygiene`: revoke keys of people who left | yes | no |
+| `hygiene`: find unused keys | yes | no. DeepInfra has no last use |
+| `exporter`: spend and limits | yes | yes. Spend this month only |
+| `exporter`: last use | yes | no |
+
 ## Provider commands
 
 ### OpenRouter
@@ -132,8 +178,7 @@ Inventory mode manages keys of all providers from a git repository of YAML manif
 providers, a secrets store and Kubernetes match the manifests, rotates keys before they expire, issues short-lived
 self-service keys, and exports spend and expiry as Prometheus metrics.
 
-Providers: OpenRouter (read and write), DeepInfra (read only: spend, limits and the exporter work; creating,
-limiting and revoking keys fail, see [DeepInfra](#deepinfra)).
+DeepInfra is read only. [Provider support](#provider-support) shows what works for each provider.
 
 To start, copy [`examples/inventory`](examples/inventory) and run `orkeys validate --repo <dir>`.
 [`examples/inventory/.github/workflows`](examples/inventory/.github/workflows) has GitHub Actions workflows for
@@ -678,7 +723,3 @@ Layout:
 2. Add a `## vX.Y.Z (YYYY-MM-DD)` section to `CHANGELOG.md` with the changes and their commits.
 3. Merge to `main`. The Release workflow tags the commit with the content of `VERSION`, builds the binaries and
    creates the GitHub release.
-
-## License
-
-[MIT](LICENSE)
