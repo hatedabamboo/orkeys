@@ -293,7 +293,7 @@ Unknown fields are errors, so a typo does not pass silently.
 | `providers[].kind` | the name | Provider type: `openrouter`, `deepinfra` or `openai` |
 | `providers[].management_key` | | Secret path with field `key` (and optional `self_id`, `workspace`, `base_url`, and the provider options). Optional if `ORKEYS_<NAME>_KEY` is set |
 | `providers[].workspace`, `base_url` | | OpenRouter workspace or OpenAI project ID; API base URL |
-| `providers[].options` | | Settings of one provider type. `openai`: `project` (the project ID, required here or in `workspace`). Other types have none. Unknown options are errors |
+| `providers[].options` | | Settings of the provider. All types: `report_unmanaged`, `ignore_disabled`, `ignore_unmanaged` (see [Keys without a manifest](#keys-without-a-manifest)) and `track_only` (see [Tracking a key](#tracking-a-key)). `openai`: `project` (the project ID, required here or in `workspace`). Unknown options are errors |
 | `envs` | `[prod, staging, dev]` | Allowed `env` values of manifests |
 | `name_prefix` | `{env}-{team}-` | Required start of key names. `{env}` and `{team}` are replaced. `""` turns the check off |
 | `naming` | `^[a-z0-9][a-z0-9._-]*$` | Regex that every key name must match |
@@ -368,7 +368,6 @@ its keys are made and how they end:
 | `notify_before` | `request` | none | Send `expiry_notice` this long before expiry |
 | `max_active` | `request` | none | Active keys of this kind per person |
 | `max_total_limit` | `request` | none | Sum of limits of this kind per person |
-| `track_only` | `manifest` | `false` | Default of the key field `track_only`. `true` needs `budget.reset: monthly`. See [Tracking a key](#tracking-a-key) |
 
 ```yaml
 kinds:
@@ -445,7 +444,7 @@ service (Alertmanager, a CI step, a bot) can route them.
 | `consumers[]` | no | `type` (`eso`, `direct` or `github`). For `eso` and `direct`: `cluster`, `namespace`, `externalsecret` (eso), `restart` (`deployment/x`, `statefulset/x`, `daemonset/x`, `cronjob/x`). orkeys restarts only what `restart` lists. For `github`: `repo` (`owner/repo`) or `org`, `environment` (repo only), `name`, `visibility` (org only: `private` (default) or `all`). See [GitHub Actions secrets](#github-actions-secrets). A field of another type is an error |
 | `import.id`, `import.name` | no | Adopt an existing provider key instead of creating one. `name` is its current name at the provider. See below |
 | `disabled` | no | `true` disables the key at the provider and stops its rotation. Default `false`. Not for OpenAI keys. See below |
-| `track_only` | no | `true`: orkeys saves the state of the `import` key and exports its metrics, and does not change the key. Default: the kind `track_only`. `false` on a key of a kind with `track_only: true` makes a managed key. See [Tracking a key](#tracking-a-key) |
+| `track_only` | no | `true`: orkeys saves the state of the `import` key and exports its metrics, and does not change the key. Default: the provider option `track_only`. `false` on a key of a provider with `track_only: true` makes a managed key. See [Tracking a key](#tracking-a-key) |
 
 ```yaml
 secret:                             # one key in two places; each rotation updates both
@@ -536,8 +535,9 @@ Remove `disabled: true` (or set `false`) to enable the key again. This works onl
 
 With `track_disabled: true`, a key disabled by hand (`orkeys or disable`) is enabled again on the next `apply`.
 
-`track_disabled` also controls provider keys without a manifest. With `false`, `plan` and `orkeys import` ignore such
-keys when they are disabled. With `true`, `plan` reports them as unmanaged and `orkeys import` prints manifests for them.
+`track_disabled` is also the default for provider keys without a manifest. With `false`, `plan`, `orkeys import` and
+the exporter ignore such keys when they are disabled. With `true`, they report them. The provider option
+`ignore_disabled` replaces this default for one provider. See [Keys without a manifest](#keys-without-a-manifest).
 
 #### Importing an existing key
 
@@ -579,8 +579,8 @@ Limits:
 - `validate` rejects `secret`, `consumers` and `disabled: true` on a tracked key. `import` is required.
 
 Use `track_only: true` for a key that orkeys cannot or must not manage, for example a DeepInfra key or a key that
-another tool rotates. orkeys keeps a state entry with the key ID, team, env, service, channels and budget. The exporter then
-shows the key metrics with the team labels, so the spend and budget alert rules work for it.
+another tool rotates. orkeys keeps a state entry with the key ID, team, env, service, channels and budget. The
+exporter then shows the key metrics with the team labels, so the spend and budget alert rules work for it.
 
 1. Run `orkeys import --track-only`. It prints a manifest with `track_only: true` and no `secret` for each provider
    key without state.
@@ -600,8 +600,20 @@ track_only: true            # orkeys exports the spend and does not change the k
 budget: {limit: 300}        # alert budget per month; not set at the provider
 ```
 
-To track all keys of a kind, set `track_only: true` on the kind. A key of that kind with `track_only: false` is a
-managed key.
+To track all keys of a provider, set `track_only: true` in its options. A key of that provider with
+`track_only: false` is a managed key. `orkeys request` refuses a provider with `track_only: true`.
+
+```yaml
+providers:
+  deepinfra:
+    management_key: secret/orkeys/providers/deepinfra
+    options:
+      track_only: true                       # manifests of DeepInfra keys only track them
+```
+
+When you set `track_only: true` on a provider that has managed keys, `validate` fails for their manifests: they have
+`secret` and no `import`. Set `track_only: false` in each of them. orkeys does not convert a managed key to a tracked
+key.
 
 | Change | Effect at `apply` |
 |---|---|
@@ -615,6 +627,45 @@ managed key.
 `rotate` and `hygiene` skip tracked keys, and `orkeys revoke` refuses them. `orkeys state` shows `tracked` in the
 `ROTATION` column. The exporter shows `orkeys_key_hard_limit_usd` from the limit that the provider reports, and no
 `orkeys_key_expires_timestamp_seconds` when the provider key has no expiry.
+
+#### Keys without a manifest
+
+Limits:
+
+- `ignore_unmanaged` takes key IDs only. Key names are not unique at the providers, so a name does not identify a key.
+- An ignored key has no state and no metrics. orkeys does not see its spend.
+- The management key secret cannot set these options. Set them in `policy.yaml`.
+
+`plan` lists provider keys that have no state, and the exporter counts them in `orkeys_unmanaged_keys`. Use an alert
+rule on this metric to find keys made outside orkeys. Use the options of each provider to change what they report:
+
+| Option | Default | Meaning |
+|---|---|---|
+| `report_unmanaged` | `true` | `false`: `plan` does not show keys of this provider without state, and the exporter does not export `orkeys_unmanaged_keys` for it. `orkeys import` still prints them |
+| `ignore_disabled` | the opposite of `track_disabled` | `true`: `plan`, `orkeys import` and the exporter skip keys that are disabled at the provider |
+| `ignore_unmanaged` | | Key IDs that `plan`, `orkeys import` and the exporter never report |
+
+```yaml
+providers:
+  openrouter:
+    management_key: secret/orkeys/providers/openrouter
+    options:
+      ignore_disabled: true                  # skip keys disabled at OpenRouter
+      ignore_unmanaged:
+        - 3f2a9c1b7e04d5a6...                # CI key of the platform team, managed in Terraform
+  openai:
+    management_key: secret/orkeys/providers/openai
+    options:
+      project: proj_abc123                   # the project that holds the keys
+      report_unmanaged: false                # other teams make keys in this project
+```
+
+The key ID is the OpenRouter key `hash`, the DeepInfra token ID or the OpenAI key ID. `orkeys keys -p <provider> list`
+and the `plan` output show it. A disabled key is an OpenRouter key with the disabled flag, a DeepInfra key with a
+limit of 0, or an OpenAI key with inactive project access.
+
+`plan` shows a warning for an ID in `ignore_unmanaged` that is not at the provider or that has state. Remove such
+entries.
 
 ### Output and events
 
@@ -828,7 +879,7 @@ this rule is the only control of spend: OpenAI does not stop a key at its budget
 | `orkeys_key_last_used_timestamp_seconds` | Last use (OpenRouter and OpenAI). OpenRouter reports the request time for recently used keys, so treat it as "recently used", not as an exact time |
 | `orkeys_key_rotation_state` | 0 idle, 1 consumers not synced, 2 old key waits for revoke, 4 failed |
 | `orkeys_key_missing` | 1 if the key is not found at the provider |
-| `orkeys_unmanaged_keys{provider}` | Provider keys without state |
+| `orkeys_unmanaged_keys{provider}` | Provider keys without state that the provider options do not ignore. Not exported with `report_unmanaged: false`. The exporter reads the options only with `--policy` |
 | `orkeys_provider_poll_success{provider}` | 1 if the last poll worked |
 | `orkeys_provider_last_poll_timestamp_seconds{provider}` | Last successful poll |
 | `orkeys_state_last_load_timestamp_seconds` | Last successful state load |

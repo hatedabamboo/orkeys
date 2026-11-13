@@ -109,7 +109,7 @@ func providerEnv(name, suffix string) string {
 }
 
 func providerFromSecrets(ctx context.Context, sec secrets.Store, name string, cfg manifest.ProviderConfig, timeout time.Duration) (provider.Provider, error) {
-	pc := provider.Config{BaseURL: cfg.BaseURL, Workspace: cfg.Workspace, Options: maps.Clone(cfg.Options), Timeout: timeout}
+	pc := provider.Config{BaseURL: cfg.BaseURL, Workspace: cfg.Workspace, Options: maps.Clone(cfg.Options.Type), Timeout: timeout}
 	kind := cfg.Kind
 	if kind == "" {
 		kind = name

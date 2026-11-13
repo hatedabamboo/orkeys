@@ -23,6 +23,8 @@ type exporterConfig struct {
 	State     string
 	Secrets   string
 	Providers map[string]manifest.ProviderConfig
+	// Policy is nil without --policy.
+	Policy *manifest.Policy
 }
 
 // resolveExporterConfig starts from policy.yaml (when given) and lets explicit flags override it.
@@ -33,6 +35,7 @@ func resolveExporterConfig(policyPath, stateURL, secretsKind string, providerPat
 		if err != nil {
 			return nil, err
 		}
+		c.Policy = pol
 		if !stateSet {
 			c.State = pol.State
 		}
@@ -107,7 +110,7 @@ func (a *app) exporterCmd() *cobra.Command {
 				}
 				providers[name] = p
 			}
-			x := &exporter.Exporter{Store: st, Providers: providers, Interval: interval}
+			x := &exporter.Exporter{Store: st, Providers: providers, Policy: cfg.Policy, Interval: interval}
 			go x.Run(ctx)
 			srv := &http.Server{Addr: listen, Handler: x, ReadHeaderTimeout: 10 * time.Second}
 			go func() {

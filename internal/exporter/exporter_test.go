@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hatedabamboo/orkeys/internal/manifest"
 	"github.com/hatedabamboo/orkeys/internal/provider"
 	"github.com/hatedabamboo/orkeys/internal/state"
 )
@@ -136,6 +137,48 @@ func TestMetricsTrackedKey(t *testing.T) {
 	}
 	if !strings.Contains(out, `orkeys_unmanaged_keys{provider="deepinfra"} 0`) {
 		t.Errorf("tracked keys are not unmanaged:\n%s", out)
+	}
+}
+
+func TestUnmanagedMetric(t *testing.T) {
+	scrape := func(pol *manifest.Policy) string {
+		x := &Exporter{
+			Store: states{{Name: "prod-a-b", Provider: "openrouter", KeyID: "k1"}},
+			Providers: provider.Set{"openrouter": &prov{keys: []provider.Key{
+				{ID: "k1"}, {ID: "rogue"}, {ID: "known-rogue"}, {ID: "off", Disabled: true},
+			}}},
+			Policy: pol,
+			Log:    &strings.Builder{},
+		}
+		x.Poll(context.Background())
+		rec := httptest.NewRecorder()
+		x.ServeHTTP(rec, httptest.NewRequest("GET", "/metrics", nil))
+		return rec.Body.String()
+	}
+	yes, no := true, false
+	withOptions := func(o manifest.ProviderOptions) *manifest.Policy {
+		return &manifest.Policy{TrackDisabled: true, Providers: manifest.Providers{"openrouter": {Options: o}}}
+	}
+	for name, c := range map[string]struct {
+		pol  *manifest.Policy
+		want string
+	}{
+		"no policy":       {nil, `orkeys_unmanaged_keys{provider="openrouter"} 2`},
+		"track_disabled":  {&manifest.Policy{TrackDisabled: true}, `orkeys_unmanaged_keys{provider="openrouter"} 3`},
+		"ignore_disabled": {withOptions(manifest.ProviderOptions{IgnoreDisabled: &yes}), `orkeys_unmanaged_keys{provider="openrouter"} 2`},
+		"ignore list":     {withOptions(manifest.ProviderOptions{IgnoreUnmanaged: []string{"known-rogue"}}), `orkeys_unmanaged_keys{provider="openrouter"} 2`},
+		"report false":    {withOptions(manifest.ProviderOptions{ReportUnmanaged: &no}), ""},
+	} {
+		out := scrape(c.pol)
+		if c.want == "" {
+			if strings.Contains(out, "orkeys_unmanaged_keys") {
+				t.Errorf("%s: want no unmanaged metric:\n%s", name, out)
+			}
+			continue
+		}
+		if !strings.Contains(out, c.want) {
+			t.Errorf("%s: want %q in:\n%s", name, c.want, out)
+		}
 	}
 }
 

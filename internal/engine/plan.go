@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"maps"
 	"math"
 	"slices"
 	"strings"
@@ -121,7 +122,27 @@ func (p *Plan) Deletes() int {
 // Plan compares the inventory with the state and the providers and returns the changes. It changes nothing.
 func (e *Engine) Plan(ctx context.Context) (*Plan, error) {
 	p, _, err := e.plan(ctx)
+	if p != nil {
+		p.Unmanaged = slices.DeleteFunc(p.Unmanaged, func(fk ForeignKey) bool { return !e.Inv.Policy.ReportUnmanaged(fk.Provider) })
+	}
 	return p, err
+}
+
+// staleIgnores warns about entries of options.ignore_unmanaged that name a missing or a managed key.
+func (e *Engine) staleIgnores(lists map[string][]provider.Key, known map[string]string) []string {
+	var out []string
+	for _, name := range slices.Sorted(maps.Keys(lists)) {
+		for _, id := range e.Inv.Policy.Providers[name].Options.IgnoreUnmanaged {
+			at := "policy.yaml: providers." + name + ".options." + manifest.OptIgnoreUnmanaged
+			switch {
+			case known[name+"/"+id] != "":
+				out = append(out, fmt.Sprintf("%s: key %s is managed as %s; remove it from the list", at, id, known[name+"/"+id]))
+			case provider.Find(lists[name], id) == nil:
+				out = append(out, fmt.Sprintf("%s: no key with id %s at the provider; remove it from the list", at, id))
+			}
+		}
+	}
+	return out
 }
 
 func (e *Engine) plan(ctx context.Context) (*Plan, map[string][]provider.Key, error) {
@@ -281,14 +302,14 @@ func (e *Engine) plan(ctx context.Context) (*Plan, map[string][]provider.Key, er
 			if known[id] != "" || pk.ID == self {
 				continue
 			}
-			// Without track_disabled, a disabled key without a manifest is not reported for import.
-			if pk.Disabled && !e.Inv.Policy.TrackDisabled {
+			if e.Inv.Policy.IgnoresUnmanaged(name, pk) {
 				continue
 			}
 			plan.Unmanaged = append(plan.Unmanaged, ForeignKey{Provider: name, ID: pk.ID, Name: pk.Name})
 		}
 	}
 	sortForeign(plan.Unmanaged)
+	plan.Warnings = append(plan.Warnings, e.staleIgnores(lists, known)...)
 	plan.Fingerprint = plan.fingerprint()
 	if n, limit := plan.Deletes(), e.Inv.Policy.DeleteLimit(); n > limit {
 		plan.Warnings = append(plan.Warnings, fmt.Sprintf(

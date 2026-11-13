@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/hatedabamboo/orkeys/internal/manifest"
 	"github.com/hatedabamboo/orkeys/internal/provider"
 	"github.com/hatedabamboo/orkeys/internal/state"
 )
@@ -24,9 +25,11 @@ type StateLister interface {
 type Exporter struct {
 	Store     StateLister
 	Providers provider.Set
-	Interval  time.Duration
-	Log       io.Writer
-	Now       func() time.Time
+	// Policy sets the report of unmanaged keys (providers[].options in policy.yaml). Nil means the defaults.
+	Policy   *manifest.Policy
+	Interval time.Duration
+	Log      io.Writer
+	Now      func() time.Time
 
 	mu       sync.RWMutex
 	body     []byte
@@ -251,15 +254,19 @@ func (x *Exporter) render() []byte {
 		names = append(names, n)
 	}
 	slices.Sort(names)
+	pol := x.Policy
+	if pol == nil {
+		pol = &manifest.Policy{}
+	}
 	for _, n := range names {
 		unmanaged := 0
 		self := x.Providers[n].SelfID()
 		for _, k := range x.lists[n] {
-			if !known[n+"/"+k.ID] && k.ID != self {
+			if !known[n+"/"+k.ID] && k.ID != self && !pol.IgnoresUnmanaged(n, k) {
 				unmanaged++
 			}
 		}
-		if x.pollOK[n] {
+		if x.pollOK[n] && pol.ReportUnmanaged(n) {
 			w.gauge("orkeys_unmanaged_keys", "Provider keys that orkeys does not manage.", []string{"provider", n}, float64(unmanaged))
 		}
 	}

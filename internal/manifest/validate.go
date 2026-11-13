@@ -61,14 +61,21 @@ func (inv *Inventory) Validate() []Problem {
 			add("policy.yaml", "providers.%s: unknown kind %q (known: %s)", name, pc.Kind, strings.Join(provider.Names(), ", "))
 			continue
 		}
-		for _, opt := range slices.Sorted(maps.Keys(pc.Options)) {
+		for _, opt := range slices.Sorted(maps.Keys(pc.Options.Type)) {
 			if !slices.Contains(info.Options, opt) {
-				known := "none"
-				if len(info.Options) > 0 {
-					known = strings.Join(info.Options, ", ")
-				}
+				known := strings.Join(append(slices.Clone(CommonProviderOptions), info.Options...), ", ")
 				add("policy.yaml", "providers.%s.options.%s: unknown option for %s (known: %s)", name, opt, pc.Kind, known)
 			}
+		}
+		seen := map[string]bool{}
+		for i, id := range pc.Options.IgnoreUnmanaged {
+			switch {
+			case strings.TrimSpace(id) == "":
+				add("policy.yaml", "providers.%s.options.%s[%d]: empty key id", name, OptIgnoreUnmanaged, i)
+			case seen[id]:
+				add("policy.yaml", "providers.%s.options.%s: key id %s is listed twice", name, OptIgnoreUnmanaged, id)
+			}
+			seen[id] = true
 		}
 	}
 	if len(pol.Kinds) == 0 {
@@ -238,8 +245,6 @@ func validateKind(pol *Policy, name string, add func(string, string, ...any)) {
 	}
 	if !slices.Contains(resets, kp.Budget.Reset) {
 		add("policy.yaml", "%s.budget.reset: want daily, weekly or monthly", at)
-	} else if kp.TrackOnly && kp.Budget.Reset != DefaultReset {
-		add("policy.yaml", "%s.budget.reset: track_only: true allows only monthly", at)
 	}
 	for _, p := range kp.Providers {
 		if _, ok := pol.Providers[p]; !ok {
@@ -255,9 +260,6 @@ func validateKind(pol *Policy, name string, add func(string, string, ...any)) {
 			add("policy.yaml", "%s.ttl: must be longer than rotate_before", at)
 		}
 	case SourceRequest:
-		if kp.TrackOnly {
-			add("policy.yaml", "%s.track_only: only for source: manifest", at)
-		}
 		if kp.RotateBefore.Duration > 0 || kp.RevokeGrace.Duration > 0 {
 			add("policy.yaml", "%s: rotate_before and revoke_grace are only for source: manifest", at)
 		}

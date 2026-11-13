@@ -24,7 +24,7 @@ func writePlan(w io.Writer, p *engine.Plan) {
 		fmt.Fprintf(w, "warning: %s\n", s)
 	}
 	for _, k := range p.Unmanaged {
-		fmt.Fprintf(w, "unmanaged: %s %s (%s); run `orkeys import`\n", k.Provider, k.ID, k.Name)
+		fmt.Fprintf(w, "unmanaged: %s %s (%s); run `orkeys import`, or add the id to providers.%s.options.ignore_unmanaged\n", k.Provider, k.ID, k.Name, k.Provider)
 	}
 }
 
@@ -47,7 +47,7 @@ func writePlanMarkdown(w io.Writer, p *engine.Plan) {
 		}
 	}
 	if n := len(p.Unmanaged); n > 0 {
-		fmt.Fprintf(w, "\n%d key(s) at providers have no manifest. Run orkeys import.\n", n)
+		fmt.Fprintf(w, "\n%d key(s) at providers have no manifest. Run `orkeys import`, or add the IDs to `options.ignore_unmanaged` of the provider in `policy.yaml`.\n", n)
 	}
 }
 

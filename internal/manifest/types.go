@@ -9,6 +9,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/hatedabamboo/orkeys/internal/provider"
 	"github.com/hatedabamboo/orkeys/internal/values"
 )
 
@@ -67,6 +68,25 @@ type Policy struct {
 	MaxDeletes *int `yaml:"max_deletes"`
 }
 
+// ReportUnmanaged reports whether plan and the exporter show keys of provider name that have no state.
+func (p *Policy) ReportUnmanaged(name string) bool {
+	r := p.Providers[name].Options.ReportUnmanaged
+	return r == nil || *r
+}
+
+// IgnoresUnmanaged reports whether k of provider name is left out of the unmanaged keys.
+func (p *Policy) IgnoresUnmanaged(name string, k provider.Key) bool {
+	o := p.Providers[name].Options
+	if slices.Contains(o.IgnoreUnmanaged, k.ID) {
+		return true
+	}
+	ignoreDisabled := !p.TrackDisabled
+	if o.IgnoreDisabled != nil {
+		ignoreDisabled = *o.IgnoreDisabled
+	}
+	return k.Disabled && ignoreDisabled
+}
+
 // DefaultMaxDeletes is the max_deletes value when policy.yaml does not set it.
 const DefaultMaxDeletes = 3
 
@@ -97,8 +117,6 @@ type KindPolicy struct {
 	NotifyBefore  Duration `yaml:"notify_before"`
 	MaxActive     int      `yaml:"max_active"`
 	MaxTotalLimit float64  `yaml:"max_total_limit"`
-	// TrackOnly is the default of the key field track_only for keys of this kind.
-	TrackOnly bool `yaml:"track_only"`
 }
 
 func (kp *KindPolicy) AllowsProvider(name string) bool {
@@ -192,14 +210,76 @@ func (p *Policy) ProviderKind(name string) string {
 
 type ProviderConfig struct {
 	// Name is the provider name used in manifests, state and metrics. Kind is its type.
-	Name          string `yaml:"name"`
-	Kind          string `yaml:"kind"`
-	ManagementKey string `yaml:"management_key"`
-	Workspace     string `yaml:"workspace"`
-	BaseURL       string `yaml:"base_url"`
-	// Options are settings of one provider type, for example project for openai. The provider type lists
-	// the names it knows.
-	Options map[string]string `yaml:"options,omitempty"`
+	Name          string          `yaml:"name"`
+	Kind          string          `yaml:"kind"`
+	ManagementKey string          `yaml:"management_key"`
+	Workspace     string          `yaml:"workspace"`
+	BaseURL       string          `yaml:"base_url"`
+	Options       ProviderOptions `yaml:"options,omitempty"`
+}
+
+// Names of the provider options that all provider types have.
+const (
+	OptReportUnmanaged = "report_unmanaged"
+	OptIgnoreDisabled  = "ignore_disabled"
+	OptIgnoreUnmanaged = "ignore_unmanaged"
+	OptTrackOnly       = "track_only"
+)
+
+// CommonProviderOptions are the option names of all provider types.
+var CommonProviderOptions = []string{OptReportUnmanaged, OptIgnoreDisabled, OptIgnoreUnmanaged, OptTrackOnly}
+
+// ProviderOptions are providers[].options. The common options set the report of keys without state and the
+// default of track_only. Type holds
+// the string options of one provider type, for example project for openai. The provider type lists the names it knows.
+type ProviderOptions struct {
+	// ReportUnmanaged is false to hide keys without state in plan and in orkeys_unmanaged_keys. Nil means true.
+	ReportUnmanaged *bool
+	// IgnoreDisabled skips disabled keys without state. Nil means the opposite of track_disabled.
+	IgnoreDisabled *bool
+	// IgnoreUnmanaged are key IDs that are never reported. Key names are not unique at the providers,
+	// so only an ID identifies a key.
+	IgnoreUnmanaged []string
+	// TrackOnly is the default of the key field track_only for keys of this provider.
+	TrackOnly bool
+	Type      map[string]string
+}
+
+func (o *ProviderOptions) UnmarshalYAML(n *yaml.Node) error {
+	if n.Tag == "!!null" {
+		return nil
+	}
+	if n.Kind != yaml.MappingNode {
+		return fmt.Errorf("line %d: options: want a mapping", n.Line)
+	}
+	out := ProviderOptions{}
+	for i := 0; i < len(n.Content); i += 2 {
+		k, v := n.Content[i], n.Content[i+1]
+		var err error
+		switch k.Value {
+		case OptReportUnmanaged:
+			err = v.Decode(&out.ReportUnmanaged)
+		case OptIgnoreDisabled:
+			err = v.Decode(&out.IgnoreDisabled)
+		case OptIgnoreUnmanaged:
+			err = v.Decode(&out.IgnoreUnmanaged)
+		case OptTrackOnly:
+			err = v.Decode(&out.TrackOnly)
+		default:
+			if v.Kind != yaml.ScalarNode {
+				return fmt.Errorf("line %d: options.%s: want a string", v.Line, k.Value)
+			}
+			if out.Type == nil {
+				out.Type = map[string]string{}
+			}
+			out.Type[k.Value] = v.Value
+		}
+		if err != nil {
+			return fmt.Errorf("line %d: options.%s: %w", v.Line, k.Value, err)
+		}
+	}
+	*o = out
+	return nil
 }
 
 type ClusterConfig struct {
@@ -252,7 +332,7 @@ type Key struct {
 	Import      *Import  `yaml:"import,omitempty"`
 	Disabled    bool     `yaml:"disabled,omitempty"`
 	// Track: orkeys keeps state and metrics of the imported key and does not change the key. Nil means the
-	// kind track_only. Load sets it from the kind.
+	// provider option track_only. Load sets it from the provider.
 	Track     *bool      `yaml:"track_only,omitempty"`
 	Budget    Budget     `yaml:"budget"`
 	TTL       Duration   `yaml:"ttl"`

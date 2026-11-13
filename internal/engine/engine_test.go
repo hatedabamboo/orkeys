@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -609,6 +610,39 @@ func TestDisabledUnmanagedKeys(t *testing.T) {
 	v.edit(t, "policy.yaml", "secrets: vault", "secrets: vault\ntrack_disabled: true")
 	if p := v.plan(t); len(p.Unmanaged) != 2 {
 		t.Fatalf("track_disabled true: unmanaged %v", p.Unmanaged)
+	}
+	v.edit(t, "policy.yaml", "    management_key: kv/orkeys/providers/openrouter\n", "    management_key: kv/orkeys/providers/openrouter\n    options: {ignore_disabled: true}\n")
+	if p := v.plan(t); len(p.Unmanaged) != 1 || p.Unmanaged[0].ID != "zzz" {
+		t.Fatalf("ignore_disabled true: unmanaged %v", p.Unmanaged)
+	}
+}
+
+func TestIgnoredUnmanagedKeys(t *testing.T) {
+	v := setup(t)
+	v.apply(t)
+	managed := v.store.states[prodKey].KeyID
+	v.or.keys = append(v.or.keys, provider.Key{ID: "zzz", Name: "rogue"}, provider.Key{ID: "yyy", Name: "rogue"})
+	v.edit(t, "policy.yaml", "    management_key: kv/orkeys/providers/openrouter\n",
+		"    management_key: kv/orkeys/providers/openrouter\n    options:\n      ignore_unmanaged: [yyy, gone, "+managed+"]\n")
+	p := v.plan(t)
+	if len(p.Unmanaged) != 1 || p.Unmanaged[0].ID != "zzz" {
+		t.Fatalf("unmanaged %v", p.Unmanaged)
+	}
+	w := fmt.Sprint(p.Warnings)
+	if !strings.Contains(w, "providers.openrouter.options.ignore_unmanaged: no key with id gone") ||
+		!strings.Contains(w, "providers.openrouter.options.ignore_unmanaged: key "+managed+" is managed as "+prodKey) {
+		t.Fatalf("warnings: %v", p.Warnings)
+	}
+	if c, err := v.e.Import(context.Background()); err != nil || len(c) != 1 || c[0].Key.ID != "zzz" {
+		t.Fatalf("import %+v %v", c, err)
+	}
+
+	v.edit(t, "policy.yaml", "    options:\n", "    options:\n      report_unmanaged: false\n")
+	if p := v.plan(t); len(p.Unmanaged) != 0 {
+		t.Fatalf("report false: unmanaged %v", p.Unmanaged)
+	}
+	if c, err := v.e.Import(context.Background()); err != nil || len(c) != 1 {
+		t.Fatalf("report false must keep import: %+v %v", c, err)
 	}
 }
 

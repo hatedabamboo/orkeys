@@ -132,3 +132,27 @@ func TestTrackedStateIsNotRevoked(t *testing.T) {
 		t.Fatalf("remove of a tracked state: %v", err)
 	}
 }
+
+func TestTrackOnlyProvider(t *testing.T) {
+	v := setup(t)
+	v.apply(t)
+	// Both files change before the reload: the inventory is valid only with both changes.
+	replace := func(file, old, new string) {
+		p := filepath.Join(v.root, file)
+		b, _ := os.ReadFile(p)
+		if err := os.WriteFile(p, []byte(strings.Replace(string(b), old, new, 1)), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	replace("policy.yaml", "    management_key: kv/orkeys/providers/deepinfra\n",
+		"    management_key: kv/orkeys/providers/deepinfra\n    options: {track_only: true}\n")
+	replace("teams/chat-core/"+stagingKey+".yaml", "secret:\n  path: kv/llm/staging/chat-core/evals", "import: {id: x, name: x}")
+	v.reload(t)
+	if p := v.plan(t); !p.Empty() || !strings.Contains(fmt.Sprint(p.Warnings), stagingKey+": track_only: true on a managed key") {
+		t.Fatalf("provider default on a managed key: %s %v", types(p), p.Warnings)
+	}
+	_, err := v.request(t, Request{User: "jdoe", Kind: "personal", Provider: "deepinfra", Purpose: "x"})
+	if err == nil || !strings.Contains(err.Error(), "provider deepinfra: options.track_only is true") {
+		t.Fatalf("request on a track-only provider: %v", err)
+	}
+}

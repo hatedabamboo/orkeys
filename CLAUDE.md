@@ -139,8 +139,9 @@ Ask the user for facts you cannot find: the team, the env, the provider, the lim
 - `secret.path` is where orkeys writes the key. `secret.field` defaults to `api_key`. `secret` can be a list to write
   the same key to more than one place.
 - `consumers` lists what reads the key. `restart` lists only workloads that must restart to read the new key.
-- `track_only: true` (or a kind with `track_only: true`) needs `import` and a monthly `budget.reset`, and allows
-  no `secret`, `consumers` or `disabled`. Use it for keys that orkeys must not change, for example DeepInfra keys.
+- `track_only: true` (on the key, or in the provider `options`) needs `import` and a monthly `budget.reset`, and
+  allows no `secret`, `consumers` or `disabled`. Use it for keys that orkeys must not change, for example DeepInfra
+  keys. Read the provider `options` in `policy.yaml`: a key without `track_only` uses the provider value.
 - Unknown fields are errors. Do not add fields that the README does not list.
 - Never put a key value in a manifest.
 
