@@ -17,13 +17,9 @@ import (
 //   - No place has it. The value of the new key is lost: providers show a key only once. resume issues another
 //     key. The lost key waits for revoke like an old key. A consumer can have read it already.
 func (e *Engine) resume(ctx context.Context, k *manifest.Key, st *state.State) (*state.State, error) {
-	paths := map[string]int{}
-	for _, r := range st.Secrets {
-		paths[r.Path]++
-	}
 	complete, value := true, ""
 	for _, r := range st.Secrets {
-		meta, err := e.Secrets.Meta(ctx, r.Path)
+		meta, err := e.Secrets.Meta(ctx, r.Path, r.Field)
 		if err != nil {
 			return nil, fmt.Errorf("%s: read metadata of %s: %w", st.Name, r, err)
 		}
@@ -31,8 +27,7 @@ func (e *Engine) resume(ctx context.Context, k *manifest.Key, st *state.State) (
 			complete = false
 			continue
 		}
-		// The metadata is per secret. With two fields in one secret, it does not tell which field holds the new key.
-		if value != "" || paths[r.Path] > 1 {
+		if value != "" {
 			continue
 		}
 		data, err := e.Secrets.Read(ctx, r.Path)
@@ -71,7 +66,7 @@ func (e *Engine) resume(ctx context.Context, k *manifest.Key, st *state.State) (
 // wrote it.
 func (e *Engine) secretDrift(ctx context.Context, st *state.State) (string, error) {
 	for _, r := range st.Secrets {
-		meta, err := e.Secrets.Meta(ctx, r.Path)
+		meta, err := e.Secrets.Meta(ctx, r.Path, r.Field)
 		if err != nil {
 			return "", fmt.Errorf("%s: read metadata of %s: %w", st.Name, r, err)
 		}

@@ -301,7 +301,15 @@ description: d
 secret:
   - {path: kv/llm/d}
   - {path: kv/llm/prod/chat-core/dialog}
-`, "path: already used by prod-chat-core-"},
+`, "kv/llm/prod/chat-core/dialog#api_key is already used by prod-chat-core-"},
+		"secret field too long": {"teams/chat-core/prod-chat-core-d.yaml", `
+name: prod-chat-core-d
+kind: production
+provider: openrouter
+env: prod
+description: d
+secret: {path: kv/llm/d, field: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx}
+`, "secret.field: longer than 114 characters"},
 		"secret list no path": {"teams/chat-core/prod-chat-core-d.yaml", `
 name: prod-chat-core-d
 kind: production
@@ -330,6 +338,48 @@ secret:
 			}
 			if !strings.Contains(strings.Join(all, "\n"), c.want) {
 				t.Fatalf("want %q in:\n%s", c.want, strings.Join(all, "\n"))
+			}
+		})
+	}
+}
+
+func TestSecretPathSharedByKeys(t *testing.T) {
+	cases := map[string]struct{ policy, field, want string }{
+		"other field":           {"", "agents_key", ""},
+		"same field":            {"", "api_key", "kv/llm/prod/chat-core/dialog#api_key is already used by prod-chat-core-"},
+		"vault allows any char": {"", "agents#key", ""},
+		"aws tag chars":         {"state: s3://bucket/p\nsecrets: aws\n", "agents#key", "secret.field: want only letters"},
+		"aws valid field":       {"state: s3://bucket/p\nsecrets: aws\n", "agents.key", ""},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			root := copyRepo(t)
+			if c.policy != "" {
+				pp := filepath.Join(root, "policy.yaml")
+				b, _ := os.ReadFile(pp)
+				_ = os.WriteFile(pp, []byte(strings.Replace(string(b), "state: vault://kv/orkeys/state\nsecrets: vault\n", c.policy, 1)), 0o644)
+			}
+			body := fmt.Sprintf(`
+name: prod-chat-core-agents
+kind: production
+provider: openrouter
+env: prod
+description: d
+budget: {limit: 10}
+secret: {path: kv/llm/prod/chat-core/dialog, field: %q}
+`, c.field)
+			_ = os.WriteFile(filepath.Join(root, "teams/chat-core/prod-chat-core-agents.yaml"), []byte(body), 0o644)
+			inv, err := Load(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var all []string
+			for _, p := range inv.Validate() {
+				all = append(all, p.String())
+			}
+			got := strings.Join(all, "\n")
+			if (c.want == "" && got != "") || (c.want != "" && !strings.Contains(got, c.want)) {
+				t.Fatalf("want %q, got:\n%s", c.want, got)
 			}
 		})
 	}

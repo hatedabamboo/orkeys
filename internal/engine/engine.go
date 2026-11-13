@@ -283,7 +283,7 @@ func (e *Engine) issue(ctx context.Context, k *manifest.Key, orig *state.State, 
 }
 
 func secretMeta(k *manifest.Key, keyID string) map[string]string {
-	return map[string]string{"orkeys-key": k.Name, secrets.MetaKeyID: keyID, "orkeys-team": k.Team}
+	return map[string]string{secrets.MetaKey: k.Name, secrets.MetaKeyID: keyID, secrets.MetaTeam: k.Team}
 }
 
 func secretList(refs []state.SecretRef) string {

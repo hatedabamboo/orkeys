@@ -110,7 +110,7 @@ type mapSecrets map[string]map[string]string
 
 func (m mapSecrets) Put(context.Context, string, string, string, map[string]string) error { return nil }
 func (m mapSecrets) DeleteField(context.Context, string, string) error                    { return nil }
-func (m mapSecrets) Meta(context.Context, string) (map[string]string, error)              { return nil, nil }
+func (m mapSecrets) Meta(context.Context, string, string) (map[string]string, error)      { return nil, nil }
 func (m mapSecrets) Read(_ context.Context, p string) (map[string]string, error) {
 	if d, ok := m[p]; ok {
 		return d, nil

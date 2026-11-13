@@ -440,7 +440,7 @@ service (Alertmanager, a CI step, a bot) can route them.
 | `budget.limit` | no | Limit in USD at the provider; the provider blocks the key when spend in the period reaches it. OpenAI has no per-key limit: orkeys only exports the budget as a metric. Default: the kind `budget.limit`. Up to the kind `max_limit` |
 | `budget.reset` | no | Limit period: `daily`, `weekly`, `monthly` (DeepInfra: monthly only). Default: the kind `budget.reset` |
 | `ttl` | no | `90d`, `2w`, `24h`. Default and maximum: the kind `ttl`. OpenAI: at most `365d` |
-| `secret.path`, `secret.field` | path: yes, except with `track_only: true` | Where the key goes. Vault: `<mount>/<path>`; AWS: secret name. Field default `api_key`. Other fields in the same secret are kept. `secret` is one mapping or a list of mappings: orkeys writes the same key to each place |
+| `secret.path`, `secret.field` | path: yes, except with `track_only: true` | Where the key goes. Vault: `<mount>/<path>`; AWS: secret name. Field default `api_key`. Other fields in the same secret are kept. `secret` is one mapping or a list of mappings: orkeys writes the same key to each place. Two keys can share a path, not a path and field |
 | `consumers[]` | no | `type` (`eso`, `direct` or `github`). For `eso` and `direct`: `cluster`, `namespace`, `externalsecret` (eso), `restart` (`deployment/x`, `statefulset/x`, `daemonset/x`, `cronjob/x`). orkeys restarts only what `restart` lists. For `github`: `repo` (`owner/repo`) or `org`, `environment` (repo only), `name`, `visibility` (org only: `private` (default) or `all`). See [GitHub Actions secrets](#github-actions-secrets). A field of another type is an error |
 | `import.id`, `import.name` | no | Adopt an existing provider key instead of creating one. `name` is its current name at the provider. See below |
 | `disabled` | no | `true` disables the key at the provider and stops its rotation. Default `false`. Not for OpenAI keys. See below |
@@ -741,12 +741,17 @@ Inventory mode needs two stores:
     audit trail and the way back after a bad change.
 - **Secrets** (`secrets`). Manifest keys, and by default the provider management keys.
   - `vault`: Vault KV v2. A path is `<mount>/<path>`; fields are secret fields. Manifest keys get custom metadata
-    `orkeys-key`, `orkeys-key-id`, `orkeys-team`. Field writes and deletes use check-and-set, so a change by another
-    client between the read and the write is not lost.
+    per field: `orkeys-key.<field>`, `orkeys-key-id.<field>`, `orkeys-team.<field>`. Field writes and deletes use
+    check-and-set, so a change by another client between the read and the write is not lost.
   - `aws`: AWS Secrets Manager. A path is the secret name; the value is a JSON object, fields are its keys.
-    Manifest keys get the same tags. A secret deleted by orkeys keeps a 7-day recovery window. When orkeys writes to
-    a secret in that window, it restores the secret and writes only the new field.
-  - `plan` reads `orkeys-key-id` of each place. When a place holds another key than the state, `plan` shows
+    Manifest keys get the same names as tags. A field name has only letters, digits, spaces and `_.:/=+-@`. A secret
+    deleted by orkeys keeps a 7-day recovery window. When orkeys writes to a secret in that window, it restores the
+    secret and writes only the new field.
+  - A field name has at most 114 characters: Vault metadata keys and AWS tag keys have at most 128.
+  - Two keys can use the same path with different fields. Each field has its own metadata.
+  - orkeys up to v0.4.1 wrote one set of metadata per secret (`orkeys-key-id` without a field). orkeys reads it for
+    a field that has no metadata of its own. The next write to the secret removes it.
+  - `plan` reads `orkeys-key-id.<field>` of each place. When a place holds another key than the state, `plan` shows
     `reissue`: orkeys writes a new key to all places. orkeys writes the value before the metadata, so the metadata
     always names the key in the field.
 
@@ -773,8 +778,8 @@ needs read access to the state only.
 | `ORKEYS_GITHUB_SECRETS_TOKEN` | apply, rotate | Writes GitHub Actions secrets for `github` consumers. Default: `GITHUB_TOKEN` |
 
 AWS permissions: `s3:GetObject`, `s3:PutObject`, `s3:DeleteObject` on `<bucket>/<prefix>/*` and `s3:ListBucket` on the
-bucket; `secretsmanager:GetSecretValue`, `DescribeSecret`, `CreateSecret`, `PutSecretValue`, `TagResource`, `DeleteSecret`,
-`RestoreSecret` on the secrets orkeys reads and writes. The exporter needs only `s3:GetObject`, `s3:ListBucket` and
+bucket; `secretsmanager:GetSecretValue`, `DescribeSecret`, `CreateSecret`, `PutSecretValue`, `TagResource`, `UntagResource`,
+`DeleteSecret`, `RestoreSecret` on the secrets orkeys reads and writes. The exporter needs only `s3:GetObject`, `s3:ListBucket` and
 `GetSecretValue`.
 
 ### Locking
