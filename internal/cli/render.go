@@ -24,7 +24,7 @@ func writePlan(w io.Writer, p *engine.Plan) {
 		fmt.Fprintf(w, "warning: %s\n", s)
 	}
 	for _, k := range p.Unmanaged {
-		fmt.Fprintf(w, "unmanaged: %s %s (%s); run `orkeys import`\n", k.Provider, k.ID, k.Name)
+		fmt.Fprintf(w, "unmanaged: %s %s (%s); run `orkeys import`, or add the id to providers.%s.options.ignore_unmanaged\n", k.Provider, k.ID, k.Name, k.Provider)
 	}
 }
 
@@ -47,7 +47,7 @@ func writePlanMarkdown(w io.Writer, p *engine.Plan) {
 		}
 	}
 	if n := len(p.Unmanaged); n > 0 {
-		fmt.Fprintf(w, "\n%d key(s) at providers have no manifest. Run orkeys import.\n", n)
+		fmt.Fprintf(w, "\n%d key(s) at providers have no manifest. Run `orkeys import`, or add the IDs to `options.ignore_unmanaged` of the provider in `policy.yaml`.\n", n)
 	}
 }
 
@@ -81,7 +81,9 @@ func writeIssued(w io.Writer, keys []engine.IssuedKey, markdown bool) {
 }
 
 // writeImportStubs prints one manifest per unmanaged key, with the import block filled in.
-func writeImportStubs(w io.Writer, cands []engine.Candidate) {
+// writeImportStubs prints a manifest per candidate. With trackOnly, the manifests have track_only: true, a monthly
+// budget and no secret.
+func writeImportStubs(w io.Writer, cands []engine.Candidate, trackOnly bool) {
 	for i, c := range cands {
 		k := c.Key
 		if i > 0 {
@@ -95,17 +97,26 @@ func writeImportStubs(w io.Writer, cands []engine.Candidate) {
 			info = append(info, fmt.Sprintf("$%.2f this month", *k.SpendMonthUSD))
 		}
 		fmt.Fprintf(w, "# %s key %q: %s\n", c.Provider, k.Name, strings.Join(info, ", "))
-		fmt.Fprintf(w, "# Write the current key value to secret.path first. Save as teams/<team>/<name>.yaml.\n")
+		if !trackOnly {
+			fmt.Fprintf(w, "# Write the current key value to secret.path first. Save as teams/<team>/<name>.yaml.\n")
+		} else {
+			fmt.Fprintf(w, "# Save as teams/<team>/<name>.yaml. orkeys exports the spend and does not change the key.\n")
+		}
 		fmt.Fprintf(w, "name: TODO\nkind: TODO\nprovider: %s\nenv: TODO\ndescription: TODO\n", c.Provider)
 		fmt.Fprintf(w, "import:\n  id: %s\n  name: %s\n", k.ID, yamlString(k.Name))
+		if trackOnly {
+			fmt.Fprintf(w, "track_only: true\n")
+		}
 		if k.LimitUSD != nil {
 			reset := k.LimitReset
-			if reset == "" {
+			if reset == "" || trackOnly {
 				reset = manifest.DefaultReset
 			}
 			fmt.Fprintf(w, "budget:\n  reset: %s\n  limit: %g\n", reset, *k.LimitUSD)
 		}
-		fmt.Fprintf(w, "secret:\n  path: TODO\n")
+		if !trackOnly {
+			fmt.Fprintf(w, "secret:\n  path: TODO\n")
+		}
 	}
 }
 
@@ -139,15 +150,22 @@ func writeTracked(w io.Writer, keys []engine.TrackedKey) {
 	fmt.Fprintln(tw, "NAME\tSOURCE\tTEAM\tKIND\tPROVIDER\tOWNER\tKEY ID\tLIMIT\tCREATED\tEXPIRES\tROTATION\tOLD KEYS")
 	for _, k := range keys {
 		rot := string(k.Rotation)
-		if rot == "" {
+		switch {
+		case k.TrackOnly:
+			rot = "tracked"
+		case rot == "":
 			rot = "idle"
+		}
+		exp := "-"
+		if !k.ExpiresAt.IsZero() {
+			exp = k.ExpiresAt.Format(time.DateOnly)
 		}
 		id := k.KeyID
 		if len(id) > 12 {
 			id = id[:12]
 		}
 		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t$%.2f %s\t%s\t%s\t%s\t%d\n", k.Name, k.Source, k.Team, k.Kind, k.Provider,
-			dash(k.Owner), dash(id), k.LimitUSD, k.LimitReset, k.CreatedAt.Format(time.DateOnly), k.ExpiresAt.Format(time.DateOnly),
+			dash(k.Owner), dash(id), k.LimitUSD, k.LimitReset, k.CreatedAt.Format(time.DateOnly), exp,
 			rot, len(k.PendingRevokes))
 	}
 	_ = tw.Flush()

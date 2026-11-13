@@ -80,6 +80,10 @@ func Load(root string) (*Inventory, error) {
 				k.TTL = kp.TTL
 			}
 		}
+		if k.Track == nil {
+			t := inv.Policy.Providers[k.Provider].Options.TrackOnly
+			k.Track = &t
+		}
 	}
 
 	return inv, errors.Join(errs...)

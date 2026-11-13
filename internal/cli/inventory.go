@@ -399,7 +399,8 @@ state reads only the state store. It needs no provider management keys.`,
 }
 
 func (a *app) importCmd() *cobra.Command {
-	return &cobra.Command{
+	var trackOnly bool
+	cmd := &cobra.Command{
 		Use:   "import",
 		Short: "Print a manifest with an import block for each provider key that orkeys does not manage",
 		Args:  cobra.NoArgs,
@@ -419,10 +420,12 @@ func (a *app) importCmd() *cobra.Command {
 				fmt.Fprintln(os.Stderr, "No unmanaged keys.")
 				return nil
 			}
-			writeImportStubs(os.Stdout, found)
+			writeImportStubs(os.Stdout, found, trackOnly)
 			return nil
 		},
 	}
+	cmd.Flags().BoolVar(&trackOnly, "track-only", false, "print manifests with track_only: true and no secret")
+	return cmd
 }
 
 func (a *app) hygieneCmd() *cobra.Command {

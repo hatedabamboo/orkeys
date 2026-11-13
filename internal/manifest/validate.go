@@ -61,14 +61,21 @@ func (inv *Inventory) Validate() []Problem {
 			add("policy.yaml", "providers.%s: unknown kind %q (known: %s)", name, pc.Kind, strings.Join(provider.Names(), ", "))
 			continue
 		}
-		for _, opt := range slices.Sorted(maps.Keys(pc.Options)) {
+		for _, opt := range slices.Sorted(maps.Keys(pc.Options.Type)) {
 			if !slices.Contains(info.Options, opt) {
-				known := "none"
-				if len(info.Options) > 0 {
-					known = strings.Join(info.Options, ", ")
-				}
+				known := strings.Join(append(slices.Clone(CommonProviderOptions), info.Options...), ", ")
 				add("policy.yaml", "providers.%s.options.%s: unknown option for %s (known: %s)", name, opt, pc.Kind, known)
 			}
+		}
+		seen := map[string]bool{}
+		for i, id := range pc.Options.IgnoreUnmanaged {
+			switch {
+			case strings.TrimSpace(id) == "":
+				add("policy.yaml", "providers.%s.options.%s[%d]: empty key id", name, OptIgnoreUnmanaged, i)
+			case seen[id]:
+				add("policy.yaml", "providers.%s.options.%s: key id %s is listed twice", name, OptIgnoreUnmanaged, id)
+			}
+			seen[id] = true
 		}
 	}
 	if len(pol.Kinds) == 0 {
@@ -200,6 +207,9 @@ func (inv *Inventory) Validate() []Problem {
 			}
 			imports[id] = k.Name
 		}
+		if k.TrackOnly() {
+			validateTracked(k, add)
+		}
 		validateManifestKey(inv, k, kp, add, secretPaths)
 	}
 
@@ -276,7 +286,7 @@ func validateManifestKey(inv *Inventory, k *Key, kp *KindPolicy, add func(string
 			add(p, "ttl: must be longer than kinds.%s.rotate_before", k.Kind)
 		}
 	}
-	if len(k.Secrets) == 0 {
+	if len(k.Secrets) == 0 && !k.TrackOnly() {
 		add(p, "secret.path: required")
 	}
 	own := map[string]bool{}
@@ -321,5 +331,26 @@ func validateManifestKey(inv *Inventory, k *Key, kp *KindPolicy, add func(string
 			add(p, "%s: %s target %s is already written by %s", where, c.Type, ps.TargetID(), prev)
 		}
 		secretPaths[id] = k.Name
+	}
+}
+
+// validateTracked checks a key with track_only: true. orkeys does not change a tracked key, so the fields that
+// change the key or deliver it are errors. Spend of a tracked key is monthly: DeepInfra reports only the current month.
+func validateTracked(k *Key, add func(string, string, ...any)) {
+	p := k.Path
+	if k.Import == nil {
+		add(p, "import: required with track_only: true")
+	}
+	if len(k.Secrets) > 0 {
+		add(p, "secret: not allowed with track_only: true; orkeys does not write a tracked key")
+	}
+	if len(k.Consumers) > 0 {
+		add(p, "consumers: not allowed with track_only: true; orkeys does not deliver a tracked key")
+	}
+	if k.Disabled {
+		add(p, "disabled: not allowed with track_only: true; orkeys does not change a tracked key")
+	}
+	if k.Budget.ResetOrDefault() != DefaultReset {
+		add(p, "budget.reset: track_only: true allows only monthly")
 	}
 }

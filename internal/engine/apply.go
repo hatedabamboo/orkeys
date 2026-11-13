@@ -56,6 +56,16 @@ func (e *Engine) applyOne(ctx context.Context, a Action) error {
 	case ActImport:
 		return e.adopt(ctx, a.Key, a.Current)
 
+	case ActTrack:
+		return e.track(ctx, a.Key, a.State, a.Current)
+
+	case ActUntrack:
+		if err := e.State.DeleteState(ctx, a.State.Name); err != nil {
+			return err
+		}
+		e.emit(a.State, LevelInfo, EventKeyUntracked, "manifest removed; key %s stays at the provider", short(a.State.KeyID))
+		return nil
+
 	case ActResume:
 		_, err := e.resume(ctx, a.Key, a.State)
 		return err
@@ -117,6 +127,9 @@ func (e *Engine) applyOne(ctx context.Context, a Action) error {
 }
 
 func (e *Engine) remove(ctx context.Context, st *state.State, reason string) error {
+	if st.TrackOnly {
+		return fmt.Errorf("%s: tracked key %s; orkeys does not revoke it", st.Name, short(st.KeyID))
+	}
 	// The push targets go first. If their delete fails, no key is revoked yet. The next run tries again.
 	if len(st.Pushed) > 0 {
 		err := e.syncPush(ctx, nil, st)
@@ -191,6 +204,24 @@ func (e *Engine) adopt(ctx context.Context, k *manifest.Key, cur *provider.Key) 
 	e.emit(st, LevelInfo, EventKeyImported, "key %s (%s) imported from %s; expires %s",
 		short(cur.ID), cur.Name, src, st.ExpiresAt.Format(time.DateOnly))
 	return errors.Join(e.syncPushAndSave(ctx, k, st), e.disableIfWanted(ctx, p, k, st))
+}
+
+// track saves the state of a tracked key. It reads no secret and changes nothing at the provider.
+// orig is the current state when import.id changed, else nil.
+func (e *Engine) track(ctx context.Context, k *manifest.Key, orig *state.State, cur *provider.Key) error {
+	st := e.stateFor(k)
+	st.KeyID, st.CreatedAt = cur.ID, e.now()
+	if cur.ExpiresAt != nil {
+		st.ExpiresAt = *cur.ExpiresAt
+	}
+	if orig != nil {
+		st.Rev = orig.Rev
+	}
+	if err := e.putState(ctx, st); err != nil {
+		return err
+	}
+	e.emit(st, LevelInfo, EventKeyTracked, "key %s (%s) tracked; orkeys exports its spend and does not change it", short(cur.ID), cur.Name)
+	return nil
 }
 
 // disableIfWanted disables a new or adopted key when its manifest has disabled: true.

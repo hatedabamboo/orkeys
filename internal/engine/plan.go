@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"maps"
 	"math"
 	"slices"
 	"strings"
@@ -27,6 +28,10 @@ const (
 	ActDisable     ActionType = "disable"
 	ActEnable      ActionType = "enable"
 	ActDelete      ActionType = "delete"
+	// ActTrack saves the state of a key with track_only: true. It changes nothing at the provider.
+	ActTrack ActionType = "track"
+	// ActUntrack removes the state of a tracked key whose manifest is gone. The key stays at the provider.
+	ActUntrack ActionType = "untrack"
 	// ActSyncConsumers writes the key to new push consumers and deletes removed ones.
 	ActSyncConsumers ActionType = "sync-consumers"
 	// ActResume finishes an interrupted key issue.
@@ -117,7 +122,27 @@ func (p *Plan) Deletes() int {
 // Plan compares the inventory with the state and the providers and returns the changes. It changes nothing.
 func (e *Engine) Plan(ctx context.Context) (*Plan, error) {
 	p, _, err := e.plan(ctx)
+	if p != nil {
+		p.Unmanaged = slices.DeleteFunc(p.Unmanaged, func(fk ForeignKey) bool { return !e.Inv.Policy.ReportUnmanaged(fk.Provider) })
+	}
 	return p, err
+}
+
+// staleIgnores warns about entries of options.ignore_unmanaged that name a missing or a managed key.
+func (e *Engine) staleIgnores(lists map[string][]provider.Key, known map[string]string) []string {
+	var out []string
+	for _, name := range slices.Sorted(maps.Keys(lists)) {
+		for _, id := range e.Inv.Policy.Providers[name].Options.IgnoreUnmanaged {
+			at := "policy.yaml: providers." + name + ".options." + manifest.OptIgnoreUnmanaged
+			switch {
+			case known[name+"/"+id] != "":
+				out = append(out, fmt.Sprintf("%s: key %s is managed as %s; remove it from the list", at, id, known[name+"/"+id]))
+			case provider.Find(lists[name], id) == nil:
+				out = append(out, fmt.Sprintf("%s: no key with id %s at the provider; remove it from the list", at, id))
+			}
+		}
+	}
+	return out
 }
 
 func (e *Engine) plan(ctx context.Context) (*Plan, map[string][]provider.Key, error) {
@@ -160,15 +185,15 @@ func (e *Engine) plan(ctx context.Context) (*Plan, map[string][]provider.Key, er
 		act := Action{Name: k.Name, Team: k.Team, Provider: k.Provider, Key: k, State: st}
 		limit := k.Budget.Limit
 
+		if k.TrackOnly() || (st != nil && st.TrackOnly) {
+			e.planTracked(plan, act, lists[k.Provider], known)
+			continue
+		}
 		if st == nil && k.Import != nil {
-			cur := provider.Find(lists[k.Provider], k.Import.ID)
+			cur, warn := importTarget(k, lists[k.Provider], known)
 			switch {
-			case known[k.Provider+"/"+k.Import.ID] != "":
-				plan.Warnings = append(plan.Warnings, fmt.Sprintf("%s: import: key %s is already managed as %s", k.Name, short(k.Import.ID), known[k.Provider+"/"+k.Import.ID]))
-			case cur == nil:
-				plan.Warnings = append(plan.Warnings, fmt.Sprintf("%s: import: no %s key with id %s", k.Name, k.Provider, k.Import.ID))
-			case cur.Name != k.Import.Name:
-				plan.Warnings = append(plan.Warnings, fmt.Sprintf("%s: import: key %s is named %q at the provider, not %q", k.Name, short(k.Import.ID), cur.Name, k.Import.Name))
+			case warn != "":
+				plan.Warnings = append(plan.Warnings, warn)
 			default:
 				act.Type, act.Current = ActImport, cur
 				act.Detail = fmt.Sprintf("adopt %s key %s (%s), limit $%.2f %s, ttl %s from now", k.Kind, short(cur.ID), cur.Name, limit, k.Budget.ResetOrDefault(), values.Days(k.TTL.Duration))
@@ -252,6 +277,13 @@ func (e *Engine) plan(ctx context.Context) (*Plan, map[string][]provider.Key, er
 		if e.Inv.Policy.Requested(st.Kind, st.Owner) || e.Inv.Key(st.Name) != nil {
 			continue
 		}
+		if st.TrackOnly {
+			plan.Actions = append(plan.Actions, Action{
+				Type: ActUntrack, Name: st.Name, Team: st.Team, Provider: st.Provider, State: st,
+				Detail: "manifest removed; remove the state; key " + short(st.KeyID) + " stays at the provider",
+			})
+			continue
+		}
 		plan.Actions = append(plan.Actions, Action{
 			Type: ActDelete, Name: st.Name, Team: st.Team, Provider: st.Provider, State: st,
 			Detail: "manifest removed; revoke " + strings.Join(shortAll(st.KnownIDs()), ", "),
@@ -259,7 +291,7 @@ func (e *Engine) plan(ctx context.Context) (*Plan, map[string][]provider.Key, er
 	}
 
 	for _, k := range e.Inv.Keys {
-		if k.Import != nil && byName[k.Name] == nil {
+		if k.Import != nil && (byName[k.Name] == nil || k.TrackOnly()) {
 			known[k.Provider+"/"+k.Import.ID] = k.Name
 		}
 	}
@@ -270,20 +302,76 @@ func (e *Engine) plan(ctx context.Context) (*Plan, map[string][]provider.Key, er
 			if known[id] != "" || pk.ID == self {
 				continue
 			}
-			// Without track_disabled, a disabled key without a manifest is not reported for import.
-			if pk.Disabled && !e.Inv.Policy.TrackDisabled {
+			if e.Inv.Policy.IgnoresUnmanaged(name, pk) {
 				continue
 			}
 			plan.Unmanaged = append(plan.Unmanaged, ForeignKey{Provider: name, ID: pk.ID, Name: pk.Name})
 		}
 	}
 	sortForeign(plan.Unmanaged)
+	plan.Warnings = append(plan.Warnings, e.staleIgnores(lists, known)...)
 	plan.Fingerprint = plan.fingerprint()
 	if n, limit := plan.Deletes(), e.Inv.Policy.DeleteLimit(); n > limit {
 		plan.Warnings = append(plan.Warnings, fmt.Sprintf(
 			"%d keys to revoke, more than max_deletes %d; apply refuses this plan without --allow-deletes %d", n, limit, n))
 	}
 	return plan, lists, nil
+}
+
+// importTarget returns the provider key that k imports, or a warning why the import cannot run.
+func importTarget(k *manifest.Key, keys []provider.Key, known map[string]string) (*provider.Key, string) {
+	cur := provider.Find(keys, k.Import.ID)
+	switch {
+	case known[k.Provider+"/"+k.Import.ID] != "" && known[k.Provider+"/"+k.Import.ID] != k.Name:
+		return nil, fmt.Sprintf("%s: import: key %s is already managed as %s", k.Name, short(k.Import.ID), known[k.Provider+"/"+k.Import.ID])
+	case cur == nil:
+		return nil, fmt.Sprintf("%s: import: no %s key with id %s", k.Name, k.Provider, k.Import.ID)
+	case cur.Name != k.Import.Name:
+		return nil, fmt.Sprintf("%s: import: key %s is named %q at the provider, not %q", k.Name, short(k.Import.ID), cur.Name, k.Import.Name)
+	}
+	return cur, ""
+}
+
+// planTracked plans a key with track_only: true, or a key whose state is tracked. A tracked key gets only state
+// changes: no limit, secret, consumer, disable or rotation action.
+func (e *Engine) planTracked(plan *Plan, act Action, keys []provider.Key, known map[string]string) {
+	k, st := act.Key, act.State
+	warn := func(format string, args ...any) {
+		plan.Warnings = append(plan.Warnings, k.Name+": "+fmt.Sprintf(format, args...))
+	}
+	switch {
+	case st != nil && !st.TrackOnly:
+		// A managed key has secrets, consumers and old keys. orkeys does not drop them silently.
+		warn("track_only: true on a managed key; remove track_only, or add a key with a new name instead")
+		return
+	case !k.TrackOnly():
+		warn("track_only removed from a tracked key; to manage the key, delete the manifest and apply (the key stays), " +
+			"write the key to secret.path, then add the manifest with import and without track_only")
+		return
+	case k.Import == nil:
+		warn("import: required with track_only: true")
+		return
+	case st == nil || st.KeyID != k.Import.ID:
+		cur, w := importTarget(k, keys, known)
+		if w != "" {
+			plan.Warnings = append(plan.Warnings, w)
+			return
+		}
+		act.Type, act.Current = ActTrack, cur
+		act.Detail = fmt.Sprintf("track %s key %s (%s), budget $%.2f monthly; no change at the provider", k.Kind, short(cur.ID), cur.Name, k.Budget.Limit)
+		if st != nil {
+			act.Detail = fmt.Sprintf("tracked key %s -> %s (%s); no change at the provider", short(st.KeyID), short(cur.ID), cur.Name)
+		}
+		plan.Actions = append(plan.Actions, act)
+		return
+	}
+	if provider.Find(keys, st.KeyID) == nil {
+		warn("tracked key %s is missing at the provider; change import.id or delete the manifest", short(st.KeyID))
+	}
+	if d := metaDiff(st, e.stateFor(k)); d != "" {
+		act.Type, act.Detail = ActUpdateState, d
+		plan.Actions = append(plan.Actions, act)
+	}
 }
 
 func metaDiff(cur, want *state.State) string {

@@ -50,6 +50,9 @@ func (e *Engine) Request(ctx context.Context, r Request) (*Issued, error) {
 	if !pol.AllowsProvider(r.Provider) {
 		return nil, fmt.Errorf("%s keys are not allowed for %q (allowed: %s)", r.Kind, r.Provider, strings.Join(pol.Providers, ", "))
 	}
+	if e.Inv.Policy.Providers[r.Provider].Options.TrackOnly {
+		return nil, fmt.Errorf("provider %s: options.track_only is true; orkeys does not create keys there", r.Provider)
+	}
 	if strings.TrimSpace(r.Purpose) == "" {
 		return nil, errors.New("purpose is required")
 	}

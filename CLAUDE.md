@@ -139,6 +139,9 @@ Ask the user for facts you cannot find: the team, the env, the provider, the lim
 - `secret.path` is where orkeys writes the key. `secret.field` defaults to `api_key`. `secret` can be a list to write
   the same key to more than one place.
 - `consumers` lists what reads the key. `restart` lists only workloads that must restart to read the new key.
+- `track_only: true` (on the key, or in the provider `options`) needs `import` and a monthly `budget.reset`, and
+  allows no `secret`, `consumers` or `disabled`. Use it for keys that orkeys must not change, for example DeepInfra
+  keys. Read the provider `options` in `policy.yaml`: a key without `track_only` uses the provider value.
 - Unknown fields are errors. Do not add fields that the README does not list.
 - Never put a key value in a manifest.
 
@@ -181,6 +184,8 @@ Tell the user what `apply` will do before they merge. These changes have effects
 | Add a `github` consumer | Writes the key to the GitHub secret (`sync-consumers`) |
 | `disabled: true` | Disables the key at the provider and stops rotation. Keeps state and secret. Prefer this to deleting the file when the user may need the key again |
 | `import: {id, name}` | Adopts an existing provider key. The user must first write its value to `secret.path` |
+| `import` with `track_only: true` | Saves only the state. orkeys exports metrics and does not change the key |
+| Delete the file of a tracked key | Removes only the state. The key stays at the provider |
 
 ### After you write a manifest
 

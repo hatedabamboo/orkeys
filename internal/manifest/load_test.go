@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/hatedabamboo/orkeys/internal/provider"
 )
 
 func TestLoadValid(t *testing.T) {
@@ -711,7 +713,7 @@ func TestProvidersProblems(t *testing.T) {
 		"map name":       {"providers:\n  openrouter: {name: other}\n", "differs from the key", ""},
 		"unknown kind":   {"providers:\n  - {name: openrouter}\n  - {name: deepinfra}\n  - {name: llm, kind: mistral}\n", "", `providers.llm: unknown kind "mistral"`},
 		"bad name":       {"providers:\n  - {name: openrouter}\n  - {name: deepinfra}\n  - {name: Or_2, kind: openrouter}\n", "", "providers.Or_2: name must match"},
-		"unknown option": {"providers:\n  - {name: openrouter, options: {project: x}}\n  - {name: deepinfra}\n", "", "providers.openrouter.options.project: unknown option for openrouter (known: none)"},
+		"unknown option": {"providers:\n  - {name: openrouter, options: {project: x}}\n  - {name: deepinfra}\n", "", "providers.openrouter.options.project: unknown option for openrouter (known: report_unmanaged, ignore_disabled, ignore_unmanaged, track_only)"},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -755,5 +757,131 @@ func TestSecretList(t *testing.T) {
 	_ = os.WriteFile(f, []byte(strings.Replace(body, "field: OR_KEY", "feild: OR_KEY", 1)), 0o644)
 	if _, err := Load(root); err == nil || !strings.Contains(err.Error(), "feild") {
 		t.Fatalf("want unknown field error, got %v", err)
+	}
+}
+
+func TestTrackOnly(t *testing.T) {
+	root := copyRepo(t)
+	pp := filepath.Join(root, "policy.yaml")
+	pb, _ := os.ReadFile(pp)
+	const diLine = "    management_key: kv/orkeys/providers/deepinfra\n"
+	_ = os.WriteFile(pp, []byte(strings.Replace(string(pb), diLine, diLine+"    options: {track_only: true}\n", 1)), 0o644)
+	ep := filepath.Join(root, "teams/chat-core/staging-chat-core-evals.yaml")
+	eb, _ := os.ReadFile(ep)
+	_ = os.WriteFile(ep, append(eb, "track_only: false\n"...), 0o644)
+	key := `
+name: prod-chat-core-%s
+kind: production
+provider: %s
+env: prod
+description: legacy service
+import: {id: %s, name: old}
+%s`
+	write := func(name, prov, extra string) {
+		_ = os.WriteFile(filepath.Join(root, "teams/chat-core/prod-chat-core-"+name+".yaml"), []byte(fmt.Sprintf(key, name, prov, name, extra)), 0o644)
+	}
+	write("tracked", "deepinfra", "")
+	write("manual", "openrouter", "track_only: true")
+	write("managed", "deepinfra", "track_only: false\nsecret: {path: kv/llm/managed}")
+	inv, err := Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ps := inv.Validate(); len(ps) != 0 {
+		t.Fatalf("problems: %v", ps)
+	}
+	for name, want := range map[string]bool{"prod-chat-core-tracked": true, "prod-chat-core-manual": true,
+		"prod-chat-core-managed": false, "prod-chat-core-dialog": false, "staging-chat-core-evals": false} {
+		if got := inv.Key(name).TrackOnly(); got != want {
+			t.Errorf("%s: TrackOnly %v, want %v", name, got, want)
+		}
+	}
+	if _, err := Load(withKinds(t, "  legacy: {ttl: 30d, track_only: true}\n")); err == nil {
+		t.Error("track_only on a kind must fail the load")
+	}
+
+	for extra, want := range map[string]string{
+		"secret: {path: kv/llm/x}": "secret: not allowed with track_only: true",
+		"disabled: true":           "disabled: not allowed with track_only: true",
+		"budget: {reset: weekly}":  "budget.reset: track_only: true allows only monthly",
+		"consumers: [{type: direct, cluster: prod-eu, namespace: chat, restart: [deployment/x]}]": "consumers: not allowed with track_only: true",
+	} {
+		write("tracked", "deepinfra", extra)
+		inv, err := Load(root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ps := fmt.Sprint(inv.Validate()); !strings.Contains(ps, want) {
+			t.Errorf("%s: want %q in %s", extra, want, ps)
+		}
+	}
+	_ = os.WriteFile(filepath.Join(root, "teams/chat-core/prod-chat-core-tracked.yaml"),
+		[]byte("name: prod-chat-core-tracked\nkind: production\nprovider: deepinfra\nenv: prod\ndescription: d\n"), 0o644)
+	inv, err = Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ps := fmt.Sprint(inv.Validate()); !strings.Contains(ps, "import: required with track_only: true") || strings.Contains(ps, "secret.path: required") {
+		t.Errorf("no import: %s", ps)
+	}
+}
+
+func TestUnmanagedOptions(t *testing.T) {
+	root := copyRepo(t)
+	p := filepath.Join(root, "policy.yaml")
+	base, _ := os.ReadFile(p)
+	const orLine = "    management_key: kv/orkeys/providers/openrouter\n"
+	write := func(extra, orOptions string) {
+		t.Helper()
+		b := strings.Replace(string(base), orLine, orLine+orOptions, 1) + extra
+		if err := os.WriteFile(p, []byte(b), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	load := func(extra, orOptions string) *Policy {
+		t.Helper()
+		write(extra, orOptions)
+		inv, err := Load(root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return &inv.Policy
+	}
+	off, on, t1 := provider.Key{ID: "a", Disabled: true}, provider.Key{ID: "a"}, provider.Key{ID: "t1"}
+
+	pol := load("", "")
+	if !pol.ReportUnmanaged("openrouter") || !pol.IgnoresUnmanaged("openrouter", off) || pol.IgnoresUnmanaged("openrouter", on) {
+		t.Fatal("defaults: report all active keys, ignore disabled keys")
+	}
+	if pol = load("track_disabled: true\n", ""); pol.IgnoresUnmanaged("openrouter", off) {
+		t.Fatal("track_disabled true: report disabled keys")
+	}
+	pol = load("track_disabled: true\n", "    options: {report_unmanaged: false, ignore_disabled: true, ignore_unmanaged: [t1]}\n")
+	if pol.ReportUnmanaged("openrouter") || !pol.ReportUnmanaged("deepinfra") ||
+		!pol.IgnoresUnmanaged("openrouter", off) || pol.IgnoresUnmanaged("deepinfra", off) ||
+		!pol.IgnoresUnmanaged("openrouter", t1) || pol.IgnoresUnmanaged("deepinfra", t1) {
+		t.Fatalf("per provider settings: %+v", pol.Providers["openrouter"].Options)
+	}
+
+	write("", "    options:\n      ignore_unmanaged: [a, a, \"\"]\n      region: eu\n")
+	inv, err := Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := fmt.Sprint(inv.Validate())
+	for _, want := range []string{
+		"providers.openrouter.options.ignore_unmanaged: key id a is listed twice",
+		"providers.openrouter.options.ignore_unmanaged[2]: empty key id",
+		"providers.openrouter.options.region: unknown option for openrouter (known: report_unmanaged, ignore_disabled, ignore_unmanaged, track_only)",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("want %q in %s", want, got)
+		}
+	}
+	for _, bad := range []string{"    options: {ignore_unmanaged: a}\n", "    options: {report_unmanaged: maybe}\n", "    options: {region: [eu]}\n"} {
+		write("", bad)
+		if _, err := Load(root); err == nil {
+			t.Errorf("%s: want a load error", strings.TrimSpace(bad))
+		}
 	}
 }

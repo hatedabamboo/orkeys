@@ -51,6 +51,9 @@ func (e *Engine) Rotate(ctx context.Context, opt RotateOptions) error {
 }
 
 func (e *Engine) rotateOne(ctx context.Context, st *state.State, keys []provider.Key, retry, force bool) error {
+	if st.TrackOnly {
+		return nil
+	}
 	now := e.now()
 	kp := e.Inv.Policy.Kind(st.Kind)
 	changed := false
