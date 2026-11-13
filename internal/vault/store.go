@@ -101,6 +101,34 @@ func (s *StateStore) Heartbeats(ctx context.Context) (map[string]time.Time, erro
 	return parseHeartbeats(data), nil
 }
 
+// policyName is the secret with the copy of policy.yaml. ListStates skips names that start with ".".
+const policyName = ".policy"
+
+// PutPolicy writes the copy of policy.yaml. apply calls it under the state lock.
+func (s *StateStore) PutPolicy(ctx context.Context, p *state.StoredPolicy) error {
+	return s.C.Write(ctx, s.path(policyName), map[string]any{
+		"policy_yaml": p.YAML,
+		"updated_at":  p.UpdatedAt.UTC().Format(time.RFC3339),
+	})
+}
+
+// GetPolicy returns the copy of policy.yaml, or nil when there is none.
+func (s *StateStore) GetPolicy(ctx context.Context) (*state.StoredPolicy, error) {
+	data, err := s.C.Read(ctx, s.path(policyName))
+	if err != nil || data == nil {
+		return nil, err
+	}
+	y, ok := data["policy_yaml"].(string)
+	if !ok {
+		return nil, fmt.Errorf("vault %s: field policy_yaml is not a string", s.path(policyName))
+	}
+	p := &state.StoredPolicy{YAML: y}
+	if str, ok := data["updated_at"].(string); ok {
+		p.UpdatedAt, _ = time.Parse(time.RFC3339, str)
+	}
+	return p, nil
+}
+
 func parseHeartbeats(data map[string]any) map[string]time.Time {
 	out := map[string]time.Time{}
 	for op, v := range data {

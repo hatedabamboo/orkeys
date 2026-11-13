@@ -300,3 +300,25 @@ func TestHeartbeats(t *testing.T) {
 		t.Fatal("heartbeat listed as state")
 	}
 }
+
+func TestStoredPolicy(t *testing.T) {
+	f := &fakeVault{data: map[string]map[string]any{}, meta: map[string]map[string]string{}}
+	srv := httptest.NewServer(f)
+	defer srv.Close()
+	s := &StateStore{C: New(srv.URL, "t"), Prefix: "kv/orkeys/state"}
+	ctx := context.Background()
+	if p, err := s.GetPolicy(ctx); p != nil || err != nil {
+		t.Fatalf("no policy must be nil, nil: %v %v", p, err)
+	}
+	t1 := time.Date(2026, 11, 13, 10, 0, 0, 0, time.UTC)
+	if err := s.PutPolicy(ctx, &state.StoredPolicy{YAML: "state: vault://kv/orkeys/state\n", UpdatedAt: t1}); err != nil {
+		t.Fatal(err)
+	}
+	p, err := s.GetPolicy(ctx)
+	if err != nil || p.YAML != "state: vault://kv/orkeys/state\n" || !p.UpdatedAt.Equal(t1) {
+		t.Fatalf("policy %+v %v", p, err)
+	}
+	if all, _ := s.ListStates(ctx); len(all) != 0 {
+		t.Fatal("policy listed as state")
+	}
+}

@@ -195,3 +195,26 @@ func TestHeartbeats(t *testing.T) {
 		t.Fatal("heartbeat listed as state")
 	}
 }
+
+func TestStoredPolicy(t *testing.T) {
+	f := &fakeS3{objects: map[string][]byte{}}
+	s := &StateStore{API: f, Bucket: "b", Prefix: "st"}
+	ctx := context.Background()
+	if p, err := s.GetPolicy(ctx); p != nil || err != nil {
+		t.Fatalf("no policy must be nil, nil: %v %v", p, err)
+	}
+	t1 := time.Date(2026, 11, 13, 10, 0, 0, 0, time.UTC)
+	if err := s.PutPolicy(ctx, &state.StoredPolicy{YAML: "secrets: aws\n", UpdatedAt: t1}); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := f.objects["b/st/.policy.json"]; !ok {
+		t.Fatalf("object key: %v", f.objects)
+	}
+	p, err := s.GetPolicy(ctx)
+	if err != nil || p.YAML != "secrets: aws\n" || !p.UpdatedAt.Equal(t1) {
+		t.Fatalf("policy %+v %v", p, err)
+	}
+	if all, _ := s.ListStates(ctx); len(all) != 0 {
+		t.Fatal("policy listed as state")
+	}
+}

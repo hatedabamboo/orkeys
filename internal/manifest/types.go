@@ -138,6 +138,44 @@ type Providers map[string]ProviderConfig
 
 var providerFields = []string{"name", "kind", "management_key", "workspace", "base_url", "options"}
 
+// checkProviderFields returns an error for an unknown field of a provider in policy.yaml. Node.Decode does not
+// inherit KnownFields, so the decode of Providers does not find these fields. ParsePolicy skips this check.
+func checkProviderFields(data []byte) error {
+	var doc yaml.Node
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		return err
+	}
+	if len(doc.Content) == 0 || doc.Content[0].Kind != yaml.MappingNode {
+		return nil
+	}
+	root := doc.Content[0]
+	for i := 0; i+1 < len(root.Content); i += 2 {
+		if root.Content[i].Value != "providers" {
+			continue
+		}
+		var items []*yaml.Node
+		switch n := root.Content[i+1]; n.Kind {
+		case yaml.SequenceNode:
+			items = n.Content
+		case yaml.MappingNode:
+			for j := 1; j < len(n.Content); j += 2 {
+				items = append(items, n.Content[j])
+			}
+		}
+		for _, v := range items {
+			if v.Kind != yaml.MappingNode {
+				continue
+			}
+			for j := 0; j < len(v.Content); j += 2 {
+				if k := v.Content[j]; !slices.Contains(providerFields, k.Value) {
+					return fmt.Errorf("line %d: providers: field %s not found (known: %s)", k.Line, k.Value, strings.Join(providerFields, ", "))
+				}
+			}
+		}
+	}
+	return nil
+}
+
 func (ps *Providers) UnmarshalYAML(n *yaml.Node) error {
 	out := Providers{}
 	add := func(name string, line int, pc ProviderConfig) error {
@@ -158,12 +196,6 @@ func (ps *Providers) UnmarshalYAML(n *yaml.Node) error {
 		var pc ProviderConfig
 		if v.Kind != yaml.MappingNode {
 			return pc, fmt.Errorf("line %d: providers: want a mapping", v.Line)
-		}
-		// Node.Decode does not inherit KnownFields, so check the field names here.
-		for i := 0; i < len(v.Content); i += 2 {
-			if k := v.Content[i]; !slices.Contains(providerFields, k.Value) {
-				return pc, fmt.Errorf("line %d: providers: field %s not found (known: %s)", k.Line, k.Value, strings.Join(providerFields, ", "))
-			}
 		}
 		return pc, v.Decode(&pc)
 	}

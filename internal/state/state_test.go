@@ -1,9 +1,11 @@
 package state
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestLegacySecretFields(t *testing.T) {
@@ -47,5 +49,33 @@ func TestCheckSchema(t *testing.T) {
 	}
 	if err := CheckSchema(&State{Name: "c", Schema: SchemaVersion + 1}); err == nil {
 		t.Fatal("want an error for a newer schema")
+	}
+}
+
+type memPolicies struct {
+	p      *StoredPolicy
+	writes int
+}
+
+func (m *memPolicies) PutPolicy(_ context.Context, p *StoredPolicy) error {
+	m.p = p
+	m.writes++
+	return nil
+}
+
+func (m *memPolicies) GetPolicy(context.Context) (*StoredPolicy, error) { return m.p, nil }
+
+func TestSavePolicy(t *testing.T) {
+	m := &memPolicies{}
+	ctx := context.Background()
+	t1 := time.Date(2026, 11, 13, 10, 0, 0, 0, time.UTC)
+	if wrote, err := SavePolicy(ctx, m, []byte("a: 1\n"), t1); !wrote || err != nil {
+		t.Fatalf("first save: %v %v", wrote, err)
+	}
+	if wrote, _ := SavePolicy(ctx, m, []byte("a: 1\n"), t1.Add(time.Hour)); wrote || m.writes != 1 || !m.p.UpdatedAt.Equal(t1) {
+		t.Fatalf("an equal policy must not be written again: writes %d, updated %v", m.writes, m.p.UpdatedAt)
+	}
+	if wrote, _ := SavePolicy(ctx, m, []byte("a: 2\n"), t1.Add(time.Hour)); !wrote || m.p.YAML != "a: 2\n" || !m.p.UpdatedAt.Equal(t1.Add(time.Hour)) {
+		t.Fatalf("changed policy: %+v", m.p)
 	}
 }

@@ -784,6 +784,34 @@ func TestProvidersProblems(t *testing.T) {
 	}
 }
 
+func TestParsePolicyIgnoresUnknownFields(t *testing.T) {
+	data := []byte(`state: vault://kv/orkeys/state
+future_field: x
+providers:
+  - name: openrouter
+    management_key: kv/orkeys/providers/openrouter
+    future_provider_field: y
+    options:
+      ignore_unmanaged: [k1]
+`)
+	p, err := ParsePolicy(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.State != "vault://kv/orkeys/state" || p.Secrets != "vault" || p.Providers["openrouter"].ManagementKey != "kv/orkeys/providers/openrouter" {
+		t.Fatalf("policy: %+v", p)
+	}
+	if !p.IgnoresUnmanaged("openrouter", provider.Key{ID: "k1"}) {
+		t.Fatal("ignore_unmanaged not read")
+	}
+
+	path := filepath.Join(t.TempDir(), "policy.yaml")
+	_ = os.WriteFile(path, data, 0o644)
+	if _, err := LoadPolicy(path); err == nil || !strings.Contains(err.Error(), "future_provider_field") {
+		t.Fatalf("LoadPolicy must reject unknown fields, got %v", err)
+	}
+}
+
 func TestSecretList(t *testing.T) {
 	root := copyRepo(t)
 	f := filepath.Join(root, "teams/chat-core/prod-chat-core-dialog.yaml")

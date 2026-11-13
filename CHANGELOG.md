@@ -1,5 +1,13 @@
 # CHANGELOG
 
+## v0.4.3 (2026-11-13)
+
+- (feat) `apply` saves a copy of `policy.yaml` in the state store (`.policy`) when the file changed, also when the
+  plan is empty. Without `--policy`, the exporter reads this copy at each poll. You can remove `--provider` and the
+  second copy of `policy.yaml` from the exporter deployment. The copy exists after the first `apply` with this version
+- (feat) The exporter exports `orkeys_key_track_only`: 1 for a key with `track_only: true`, 0 for a managed key.
+  Alert rules use it to tell a tracked key, which a person renews, from a key that `rotate` renews
+
 ## v0.4.2 (2026-11-13)
 
 - (change) Breaking: give the AWS role `secretsmanager:UntagResource`, and upgrade all runners together. orkeys

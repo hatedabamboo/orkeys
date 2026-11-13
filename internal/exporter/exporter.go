@@ -3,6 +3,7 @@ package exporter
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"maps"
@@ -22,14 +23,22 @@ type StateLister interface {
 	ListStates(ctx context.Context) ([]*state.State, error)
 }
 
+// PolicySource returns the copy of policy.yaml in the state store.
+type PolicySource interface {
+	GetPolicy(ctx context.Context) (*state.StoredPolicy, error)
+}
+
 type Exporter struct {
 	Store     StateLister
 	Providers provider.Set
 	// Policy sets the report of unmanaged keys (providers[].options in policy.yaml). Nil means the defaults.
-	Policy   *manifest.Policy
-	Interval time.Duration
-	Log      io.Writer
-	Now      func() time.Time
+	Policy *manifest.Policy
+	// PolicyFromStore: each poll reads Policy again from the copy in Store. Store must be a PolicySource.
+	// A new provider in that copy needs a restart: the exporter makes the provider clients at start.
+	PolicyFromStore bool
+	Interval        time.Duration
+	Log             io.Writer
+	Now             func() time.Time
 
 	mu       sync.RWMutex
 	body     []byte
@@ -40,6 +49,7 @@ type Exporter struct {
 	pollOK   map[string]bool
 	lastPoll map[string]time.Time
 	beats    map[string]time.Time
+	policyAt time.Time
 }
 
 func (x *Exporter) now() time.Time {
@@ -92,6 +102,10 @@ func (x *Exporter) Poll(ctx context.Context) {
 	}
 	x.mu.Unlock()
 
+	if x.PolicyFromStore {
+		x.loadPolicy(ctx)
+	}
+
 	if hb, ok := x.Store.(state.Heartbeats); ok {
 		beats, err := hb.Heartbeats(ctx)
 		x.mu.Lock()
@@ -118,6 +132,35 @@ func (x *Exporter) Poll(ctx context.Context) {
 	x.mu.Lock()
 	x.body = x.render()
 	x.ready = true
+	x.mu.Unlock()
+}
+
+// loadPolicy reads the stored policy. On an error it keeps the last policy, and the load time shows the age.
+func (x *Exporter) loadPolicy(ctx context.Context) {
+	ps, ok := x.Store.(PolicySource)
+	if !ok {
+		x.logf("load policy: the state store keeps no policy")
+		return
+	}
+	sp, err := ps.GetPolicy(ctx)
+	if err == nil && sp == nil {
+		err = errors.New("no policy.yaml in the state store; run apply to save it")
+	}
+	var pol *manifest.Policy
+	if err == nil {
+		pol, err = manifest.ParsePolicy([]byte(sp.YAML))
+	}
+	if err != nil {
+		x.logf("load policy: %v", err)
+		return
+	}
+	for name := range pol.Providers {
+		if _, ok := x.Providers[name]; !ok {
+			x.logf("load policy: provider %s is new; restart the exporter to export its keys", name)
+		}
+	}
+	x.mu.Lock()
+	x.Policy, x.policyAt = pol, x.now()
 	x.mu.Unlock()
 }
 
@@ -230,6 +273,14 @@ func (x *Exporter) render() []byte {
 			}
 			w.gauge("orkeys_key_missing", "1 if the key in state is not found at the provider.", l, v)
 		},
+		// A separate series and not a label: a new label on the other series changes their identity.
+		func(st *state.State, l []string, _ *provider.Key) {
+			v := 0.0
+			if st.TrackOnly {
+				v = 1
+			}
+			w.gauge("orkeys_key_track_only", "1 if orkeys only tracks the key (track_only: true) and does not rotate it.", l, v)
+		},
 	}
 
 	var active []*state.State
@@ -288,6 +339,9 @@ func (x *Exporter) render() []byte {
 	}
 	if !x.stateAt.IsZero() {
 		w.gauge("orkeys_state_last_load_timestamp_seconds", "Time of the last successful state load.", nil, float64(x.stateAt.Unix()))
+	}
+	if x.PolicyFromStore && !x.policyAt.IsZero() {
+		w.gauge("orkeys_policy_last_load_timestamp_seconds", "Time of the last successful load of policy.yaml from the state store.", nil, float64(x.policyAt.Unix()))
 	}
 	return w.buf.Bytes()
 }

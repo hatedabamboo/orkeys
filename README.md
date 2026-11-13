@@ -580,7 +580,8 @@ Limits:
 
 Use `track_only: true` for a key that orkeys cannot or must not manage, for example a DeepInfra key or a key that
 another tool rotates. orkeys keeps a state entry with the key ID, team, env, service, channels and budget. The
-exporter then shows the key metrics with the team labels, so the spend and budget alert rules work for it.
+exporter then shows the key metrics with the team labels, so the spend and budget alert rules work for it. It shows
+`orkeys_key_track_only 1` for the key. Alert rules use this series to tell a tracked key from a managed key.
 
 1. Run `orkeys import --track-only`. It prints a manifest with `track_only: true` and no `secret` for each provider
    key without state.
@@ -737,6 +738,9 @@ Inventory mode needs two stores:
     drop the fields that it does not know. Upgrade all runners (CI and laptops) together.
   - `.heartbeat` holds the time of the last successful `apply`, `rotate`, `hygiene`, `request` and `revoke`. The
     exporter shows it as `orkeys_last_success_timestamp_seconds`.
+  - `.policy` holds a copy of `policy.yaml` (`.policy.json` in S3). A successful `apply` writes it when the file
+    changed, also when the plan is empty. A failed write fails `apply`, after the key changes. The exporter reads
+    this copy, so it needs no second copy of the file.
   - Keep the history: turn on S3 bucket versioning, or keep `max_versions` above 1 on the Vault KV mount. It is the
     audit trail and the way back after a bad change.
 - **Secrets** (`secrets`). Manifest keys, and by default the provider management keys.
@@ -861,12 +865,28 @@ their GitHub login is reported as gone; they can request a new key. Run `--dry-r
 
 ### Exporter
 
+Limits:
+
+- A provider that is new in the stored `policy.yaml` gets no metrics until the exporter restarts. The exporter makes
+  the provider clients at start. It logs the new provider name.
+- The stored copy exists only after the first `apply` with orkeys v0.4.3 or later.
+- The stored copy cannot change the state store. The exporter always uses `--state` to find it.
+
 ```sh
-orkeys exporter --policy /etc/orkeys/policy.yaml          # state, secrets and providers from the policy
+orkeys exporter --state vault://secret/orkeys/state       # secrets and providers from the copy of policy.yaml in the state store
+
+orkeys exporter --policy /etc/orkeys/policy.yaml          # state, secrets and providers from the file
 
 orkeys exporter --state s3://my-bucket/orkeys/state --secrets aws \
-  --provider openrouter=orkeys/providers/openrouter      # or everything as flags; flags override --policy
+  --provider openrouter=orkeys/providers/openrouter      # flags override the policy
 ```
+
+Without `--policy`, the exporter reads the copy of `policy.yaml` that `apply` saves in the state store (`.policy`).
+It reads the copy again at each poll, so a change of the provider `options` (for example `ignore_unmanaged`) needs no
+restart. It ignores fields that it does not know: CI can run a newer orkeys than the exporter. When the copy is
+missing or broken, the exporter logs the error, keeps the last good policy and stops the update of
+`orkeys_policy_last_load_timestamp_seconds`. Without a copy and without flags, the exporter has no providers and does
+not start.
 
 The exporter polls the providers every `--interval` (default 10m) and serves the cached values. `/metrics` serves the
 metrics; `/healthz` returns 200 after the first poll. It needs read access to the state and to the management keys.
@@ -884,10 +904,12 @@ this rule is the only control of spend: OpenAI does not stop a key at its budget
 | `orkeys_key_last_used_timestamp_seconds` | Last use (OpenRouter and OpenAI). OpenRouter reports the request time for recently used keys, so treat it as "recently used", not as an exact time |
 | `orkeys_key_rotation_state` | 0 idle, 1 consumers not synced, 2 old key waits for revoke, 4 failed |
 | `orkeys_key_missing` | 1 if the key is not found at the provider |
-| `orkeys_unmanaged_keys{provider}` | Provider keys without state that the provider options do not ignore. Not exported with `report_unmanaged: false`. The exporter reads the options only with `--policy` |
+| `orkeys_key_track_only` | 1 if the key has `track_only: true`: orkeys does not rotate it, and a person must renew it before `orkeys_key_expires_timestamp_seconds`. 0 for a managed key |
+| `orkeys_unmanaged_keys{provider}` | Provider keys without state that the provider options do not ignore. Not exported with `report_unmanaged: false`. The exporter reads the options from `--policy` or from the copy in the state store |
 | `orkeys_provider_poll_success{provider}` | 1 if the last poll worked |
 | `orkeys_provider_last_poll_timestamp_seconds{provider}` | Last successful poll |
 | `orkeys_state_last_load_timestamp_seconds` | Last successful state load |
+| `orkeys_policy_last_load_timestamp_seconds` | Last successful load of `policy.yaml` from the state store. Not exported with `--policy`. Alert when it is older than 30m |
 | `orkeys_last_success_timestamp_seconds{operation}` | Last successful `apply`, `rotate`, `hygiene`, `request`, `revoke`. Alert when `rotate` is older than 2h: without it, keys with a native expiry expire at the provider |
 
 The exporter runs all the time with the management keys. Give it its own management keys where the provider allows

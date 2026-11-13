@@ -140,6 +140,32 @@ func TestMetricsTrackedKey(t *testing.T) {
 	}
 }
 
+func TestTrackOnlyMetric(t *testing.T) {
+	x := &Exporter{
+		Store: states{
+			{Name: "prod-a-t", Provider: "openai", KeyID: "t1", TrackOnly: true, ExpiresAt: time.Unix(1800000000, 0)},
+			{Name: "prod-a-m", Provider: "openai", KeyID: "m1"},
+		},
+		Providers: provider.Set{"openai": &prov{keys: []provider.Key{{ID: "t1"}, {ID: "m1"}}}},
+		Log:       &strings.Builder{},
+	}
+	x.Poll(context.Background())
+	rec := httptest.NewRecorder()
+	x.ServeHTTP(rec, httptest.NewRequest("GET", "/metrics", nil))
+	out := rec.Body.String()
+	for _, want := range []string{
+		`orkeys_key_track_only{name="prod-a-t",team="",kind="",env="",provider="openai",service="",owner="",notify_channel="",alert_channel="",reset="monthly"} 1`,
+		`orkeys_key_track_only{name="prod-a-m",team="",kind="",env="",provider="openai",service="",owner="",notify_channel="",alert_channel="",reset="monthly"} 0`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in:\n%s", want, out)
+		}
+	}
+	if strings.Count(out, "# TYPE orkeys_key_track_only gauge") != 1 {
+		t.Errorf("want one TYPE line for orkeys_key_track_only:\n%s", out)
+	}
+}
+
 func TestUnmanagedMetric(t *testing.T) {
 	scrape := func(pol *manifest.Policy) string {
 		x := &Exporter{
@@ -197,5 +223,52 @@ func TestHeartbeatMetric(t *testing.T) {
 	x.ServeHTTP(rec, httptest.NewRequest("GET", "/metrics", nil))
 	if want := `orkeys_last_success_timestamp_seconds{operation="rotate"} 1.8e+09`; !strings.Contains(rec.Body.String(), want) {
 		t.Fatalf("want %q in:\n%s", want, rec.Body.String())
+	}
+}
+
+type policyStates struct {
+	states
+	p *state.StoredPolicy
+}
+
+func (s *policyStates) GetPolicy(context.Context) (*state.StoredPolicy, error) { return s.p, nil }
+
+func TestPolicyFromStore(t *testing.T) {
+	store := &policyStates{states: states{{Name: "prod-a-b", Provider: "openrouter", KeyID: "k1"}}}
+	log := &strings.Builder{}
+	x := &Exporter{
+		Store:           store,
+		Providers:       provider.Set{"openrouter": &prov{keys: []provider.Key{{ID: "k1"}, {ID: "rogue"}}}},
+		PolicyFromStore: true,
+		Log:             log,
+		Now:             func() time.Time { return time.Unix(1800000000, 0) },
+	}
+	scrape := func() string {
+		x.Poll(context.Background())
+		rec := httptest.NewRecorder()
+		x.ServeHTTP(rec, httptest.NewRequest("GET", "/metrics", nil))
+		return rec.Body.String()
+	}
+
+	out := scrape()
+	if !strings.Contains(out, `orkeys_unmanaged_keys{provider="openrouter"} 1`) || strings.Contains(out, "orkeys_policy_last_load_timestamp_seconds") {
+		t.Errorf("without a stored policy want defaults and no load time:\n%s", out)
+	}
+	if !strings.Contains(log.String(), "run apply") {
+		t.Errorf("want a log line about the missing policy, got %q", log.String())
+	}
+
+	store.p = &state.StoredPolicy{YAML: "providers:\n  openrouter:\n    options: {ignore_unmanaged: [rogue]}\n  deepinfra: {}\nfuture_field: x\n"}
+	out = scrape()
+	if !strings.Contains(out, `orkeys_unmanaged_keys{provider="openrouter"} 0`) || !strings.Contains(out, "orkeys_policy_last_load_timestamp_seconds 1.8e+09") {
+		t.Errorf("stored policy not used:\n%s", out)
+	}
+	if !strings.Contains(log.String(), "provider deepinfra is new") {
+		t.Errorf("want a log line about the new provider, got %q", log.String())
+	}
+
+	store.p = &state.StoredPolicy{YAML: "providers: [\n"}
+	if out = scrape(); !strings.Contains(out, `orkeys_unmanaged_keys{provider="openrouter"} 0`) {
+		t.Errorf("a broken copy must keep the last policy:\n%s", out)
 	}
 }
