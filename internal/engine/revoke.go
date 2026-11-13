@@ -31,6 +31,9 @@ func (e *Engine) Revoke(ctx context.Context, names []string, reason string) erro
 		if err := state.CheckSchema(st); err != nil {
 			return err
 		}
+		if st.TrackOnly {
+			return fmt.Errorf("key %s: tracked key; orkeys does not revoke it; delete the manifest to stop tracking", n)
+		}
 		if k := e.Inv.Key(n); k != nil {
 			return fmt.Errorf("key %s: has a manifest; delete the file or set disabled: true", n)
 		}

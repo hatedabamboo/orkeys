@@ -122,6 +122,7 @@ func (e *Engine) stateFor(k *manifest.Key) *state.State {
 		Provider:   k.Provider,
 		LimitUSD:   k.Budget.Limit,
 		LimitReset: k.Budget.ResetOrDefault(),
+		TrackOnly:  k.TrackOnly(),
 	}
 	for _, sec := range k.SecretTargets() {
 		st.Secrets = append(st.Secrets, state.SecretRef{Path: sec.Path, Field: sec.Field})

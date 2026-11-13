@@ -103,6 +103,42 @@ func TestMetricsWithoutProviderLimit(t *testing.T) {
 	}
 }
 
+func TestMetricsTrackedKey(t *testing.T) {
+	month, limit := 12.0, 30.0
+	x := &Exporter{
+		Store: states{
+			{Name: "prod-a-t", Provider: "deepinfra", KeyID: "t1", LimitUSD: 50, LimitReset: "monthly", TrackOnly: true},
+			{Name: "prod-a-u", Provider: "deepinfra", KeyID: "t2", LimitUSD: 50, LimitReset: "monthly", TrackOnly: true},
+		},
+		Providers: provider.Set{"deepinfra": &prov{keys: []provider.Key{
+			{ID: "t1", SpendMonthUSD: &month, LimitUSD: &limit},
+			{ID: "t2", SpendMonthUSD: &month},
+		}, caps: provider.Caps{PerKeyLimit: true}}},
+		Log: &strings.Builder{},
+	}
+	x.Poll(context.Background())
+	rec := httptest.NewRecorder()
+	x.ServeHTTP(rec, httptest.NewRequest("GET", "/metrics", nil))
+	out := rec.Body.String()
+	for _, want := range []string{
+		`orkeys_key_spend_usd{name="prod-a-t"`, `orkeys_key_budget_usd{name="prod-a-t"`,
+		`orkeys_key_spend_usd{name="prod-a-u"`, `orkeys_key_missing{name="prod-a-t"`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in:\n%s", want, out)
+		}
+	}
+	if !strings.Contains(out, `reset="monthly"} 30`) || strings.Contains(out, `orkeys_key_hard_limit_usd{name="prod-a-u"`) {
+		t.Errorf("hard limit of a tracked key must come from the provider:\n%s", out)
+	}
+	if strings.Contains(out, "orkeys_key_expires_timestamp_seconds") {
+		t.Errorf("no expiry for a tracked key without one:\n%s", out)
+	}
+	if !strings.Contains(out, `orkeys_unmanaged_keys{provider="deepinfra"} 0`) {
+		t.Errorf("tracked keys are not unmanaged:\n%s", out)
+	}
+}
+
 type beatStore struct{ states }
 
 func (beatStore) Heartbeats(context.Context) (map[string]time.Time, error) {

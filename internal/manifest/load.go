@@ -79,6 +79,10 @@ func Load(root string) (*Inventory, error) {
 			if k.TTL.Duration == 0 {
 				k.TTL = kp.TTL
 			}
+			if k.Track == nil {
+				t := kp.TrackOnly
+				k.Track = &t
+			}
 		}
 	}
 

@@ -192,14 +192,25 @@ func (x *Exporter) render() []byte {
 		func(st *state.State, l []string, _ *provider.Key) {
 			w.gauge("orkeys_key_budget_usd", "Budget from the manifest in USD, per period (label reset).", l, st.LimitUSD)
 		},
-		func(st *state.State, l []string, _ *provider.Key) {
+		func(st *state.State, l []string, k *provider.Key) {
+			const help = "Limit set at the provider in USD, per period (label reset)."
+			// orkeys does not set the limit of a tracked key. The provider reports the limit that someone else set.
+			if st.TrackOnly {
+				if k != nil && k.LimitUSD != nil {
+					w.gauge("orkeys_key_hard_limit_usd", help, l, *k.LimitUSD)
+				}
+				return
+			}
 			// A provider without a per-key limit does not enforce the budget, so there is no hard limit to show.
 			if p, ok := x.Providers[st.Provider]; ok && p.Caps().PerKeyLimit {
-				w.gauge("orkeys_key_hard_limit_usd", "Limit set at the provider in USD, per period (label reset).", l, st.LimitUSD)
+				w.gauge("orkeys_key_hard_limit_usd", help, l, st.LimitUSD)
 			}
 		},
 		func(st *state.State, l []string, _ *provider.Key) {
-			w.gauge("orkeys_key_expires_timestamp_seconds", "Key expiry time.", l, float64(st.ExpiresAt.Unix()))
+			// A tracked key without a provider expiry has none. A zero time would fire expiry alerts.
+			if !st.ExpiresAt.IsZero() {
+				w.gauge("orkeys_key_expires_timestamp_seconds", "Key expiry time.", l, float64(st.ExpiresAt.Unix()))
+			}
 		},
 		func(st *state.State, l []string, k *provider.Key) {
 			if k != nil && k.LastUsedAt != nil {

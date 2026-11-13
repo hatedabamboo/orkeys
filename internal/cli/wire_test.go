@@ -200,12 +200,21 @@ func TestRenderPlanMarkdownAndImportStubs(t *testing.T) {
 	writeImportStubs(&b, []engine.Candidate{
 		{Provider: "openrouter", Key: &provider.Key{ID: "abc", Name: "old: key", LimitUSD: &lim, LimitReset: "weekly"}},
 		{Provider: "deepinfra", Key: &provider.Key{ID: "t1", Name: "plain"}},
-	})
+	}, false)
 	out = b.String()
 	for _, want := range []string{"import:\n  id: abc\n  name: 'old: key'\n", "budget:\n  reset: weekly\n  limit: 50\n", "---\n", "provider: deepinfra", "created unknown"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q in:\n%s", want, out)
 		}
+	}
+
+	b.Reset()
+	writeImportStubs(&b, []engine.Candidate{
+		{Provider: "deepinfra", Key: &provider.Key{ID: "t1", Name: "plain", LimitUSD: &lim, LimitReset: "weekly"}},
+	}, true)
+	out = b.String()
+	if !strings.Contains(out, "track_only: true\nbudget:\n  reset: monthly\n  limit: 50\n") || strings.Contains(out, "secret:") {
+		t.Errorf("track stub:\n%s", out)
 	}
 }
 

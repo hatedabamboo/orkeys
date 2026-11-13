@@ -200,6 +200,9 @@ func (inv *Inventory) Validate() []Problem {
 			}
 			imports[id] = k.Name
 		}
+		if k.TrackOnly() {
+			validateTracked(k, add)
+		}
 		validateManifestKey(inv, k, kp, add, secretPaths)
 	}
 
@@ -235,6 +238,8 @@ func validateKind(pol *Policy, name string, add func(string, string, ...any)) {
 	}
 	if !slices.Contains(resets, kp.Budget.Reset) {
 		add("policy.yaml", "%s.budget.reset: want daily, weekly or monthly", at)
+	} else if kp.TrackOnly && kp.Budget.Reset != DefaultReset {
+		add("policy.yaml", "%s.budget.reset: track_only: true allows only monthly", at)
 	}
 	for _, p := range kp.Providers {
 		if _, ok := pol.Providers[p]; !ok {
@@ -250,6 +255,9 @@ func validateKind(pol *Policy, name string, add func(string, string, ...any)) {
 			add("policy.yaml", "%s.ttl: must be longer than rotate_before", at)
 		}
 	case SourceRequest:
+		if kp.TrackOnly {
+			add("policy.yaml", "%s.track_only: only for source: manifest", at)
+		}
 		if kp.RotateBefore.Duration > 0 || kp.RevokeGrace.Duration > 0 {
 			add("policy.yaml", "%s: rotate_before and revoke_grace are only for source: manifest", at)
 		}
@@ -276,7 +284,7 @@ func validateManifestKey(inv *Inventory, k *Key, kp *KindPolicy, add func(string
 			add(p, "ttl: must be longer than kinds.%s.rotate_before", k.Kind)
 		}
 	}
-	if len(k.Secrets) == 0 {
+	if len(k.Secrets) == 0 && !k.TrackOnly() {
 		add(p, "secret.path: required")
 	}
 	own := map[string]bool{}
@@ -321,5 +329,26 @@ func validateManifestKey(inv *Inventory, k *Key, kp *KindPolicy, add func(string
 			add(p, "%s: %s target %s is already written by %s", where, c.Type, ps.TargetID(), prev)
 		}
 		secretPaths[id] = k.Name
+	}
+}
+
+// validateTracked checks a key with track_only: true. orkeys does not change a tracked key, so the fields that
+// change the key or deliver it are errors. Spend of a tracked key is monthly: DeepInfra reports only the current month.
+func validateTracked(k *Key, add func(string, string, ...any)) {
+	p := k.Path
+	if k.Import == nil {
+		add(p, "import: required with track_only: true")
+	}
+	if len(k.Secrets) > 0 {
+		add(p, "secret: not allowed with track_only: true; orkeys does not write a tracked key")
+	}
+	if len(k.Consumers) > 0 {
+		add(p, "consumers: not allowed with track_only: true; orkeys does not deliver a tracked key")
+	}
+	if k.Disabled {
+		add(p, "disabled: not allowed with track_only: true; orkeys does not change a tracked key")
+	}
+	if k.Budget.ResetOrDefault() != DefaultReset {
+		add(p, "budget.reset: track_only: true allows only monthly")
 	}
 }

@@ -500,6 +500,8 @@ func TestKindPolicyProblems(t *testing.T) {
 		"bad reset":        {"  batch: {ttl: 30d, budget: {reset: yearly}}\n", "kinds.batch.budget.reset: want daily, weekly or monthly"},
 		"unknown provider": {"  batch: {ttl: 30d, providers: [openai]}\n", `kinds.batch.providers: "openai" is not in providers`},
 		"bad name":         {"  Batch_1: {ttl: 30d}\n", "kinds.Batch_1: name must match"},
+		"request track":    {"  guest: {source: request, ttl: 7d, max_limit: 5, track_only: true}\n", "kinds.guest.track_only: only for source: manifest"},
+		"track weekly":     {"  batch: {ttl: 30d, track_only: true, budget: {reset: weekly}}\n", "kinds.batch.budget.reset: track_only: true allows only monthly"},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -755,5 +757,60 @@ func TestSecretList(t *testing.T) {
 	_ = os.WriteFile(f, []byte(strings.Replace(body, "field: OR_KEY", "feild: OR_KEY", 1)), 0o644)
 	if _, err := Load(root); err == nil || !strings.Contains(err.Error(), "feild") {
 		t.Fatalf("want unknown field error, got %v", err)
+	}
+}
+
+func TestTrackOnly(t *testing.T) {
+	root := withKinds(t, "  legacy: {ttl: 365d, track_only: true, budget: {limit: 50}}\n")
+	key := `
+name: prod-chat-core-%s
+kind: %s
+provider: deepinfra
+env: prod
+description: legacy service
+import: {id: %s, name: old}
+%s`
+	write := func(name, kind, extra string) {
+		_ = os.WriteFile(filepath.Join(root, "teams/chat-core/prod-chat-core-"+name+".yaml"), []byte(fmt.Sprintf(key, name, kind, name, extra)), 0o644)
+	}
+	write("tracked", "legacy", "")
+	write("manual", "production", "track_only: true")
+	write("managed", "legacy", "track_only: false\nsecret: {path: kv/llm/managed}")
+	inv, err := Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ps := inv.Validate(); len(ps) != 0 {
+		t.Fatalf("problems: %v", ps)
+	}
+	for name, want := range map[string]bool{"tracked": true, "manual": true, "managed": false, "dialog": false} {
+		if got := inv.Key("prod-chat-core-" + name).TrackOnly(); got != want {
+			t.Errorf("%s: TrackOnly %v, want %v", name, got, want)
+		}
+	}
+
+	for extra, want := range map[string]string{
+		"secret: {path: kv/llm/x}": "secret: not allowed with track_only: true",
+		"disabled: true":           "disabled: not allowed with track_only: true",
+		"budget: {reset: weekly}":  "budget.reset: track_only: true allows only monthly",
+		"consumers: [{type: direct, cluster: prod-eu, namespace: chat, restart: [deployment/x]}]": "consumers: not allowed with track_only: true",
+	} {
+		write("tracked", "legacy", extra)
+		inv, err := Load(root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ps := fmt.Sprint(inv.Validate()); !strings.Contains(ps, want) {
+			t.Errorf("%s: want %q in %s", extra, want, ps)
+		}
+	}
+	_ = os.WriteFile(filepath.Join(root, "teams/chat-core/prod-chat-core-tracked.yaml"),
+		[]byte("name: prod-chat-core-tracked\nkind: legacy\nprovider: deepinfra\nenv: prod\ndescription: d\n"), 0o644)
+	inv, err = Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ps := fmt.Sprint(inv.Validate()); !strings.Contains(ps, "import: required with track_only: true") || strings.Contains(ps, "secret.path: required") {
+		t.Errorf("no import: %s", ps)
 	}
 }

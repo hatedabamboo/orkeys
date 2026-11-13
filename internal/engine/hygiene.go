@@ -68,7 +68,7 @@ func (e *Engine) Hygiene(ctx context.Context, dryRun bool) ([]Finding, error) {
 	}
 
 	for _, st := range states {
-		if e.Inv.Policy.Requested(st.Kind, st.Owner) {
+		if st.TrackOnly || e.Inv.Policy.Requested(st.Kind, st.Owner) {
 			continue
 		}
 		if k := e.Inv.Key(st.Name); k != nil && k.Disabled {

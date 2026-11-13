@@ -97,6 +97,8 @@ type KindPolicy struct {
 	NotifyBefore  Duration `yaml:"notify_before"`
 	MaxActive     int      `yaml:"max_active"`
 	MaxTotalLimit float64  `yaml:"max_total_limit"`
+	// TrackOnly is the default of the key field track_only for keys of this kind.
+	TrackOnly bool `yaml:"track_only"`
 }
 
 func (kp *KindPolicy) AllowsProvider(name string) bool {
@@ -240,23 +242,30 @@ func (t *Team) HasMember(login string) bool {
 }
 
 type Key struct {
-	Name        string     `yaml:"name"`
-	Kind        string     `yaml:"kind"`
-	Provider    string     `yaml:"provider"`
-	Env         string     `yaml:"env,omitempty"`
-	Service     string     `yaml:"service,omitempty"`
-	Description string     `yaml:"description"`
-	Scopes      []string   `yaml:"scopes,omitempty"`
-	Import      *Import    `yaml:"import,omitempty"`
-	Disabled    bool       `yaml:"disabled,omitempty"`
-	Budget      Budget     `yaml:"budget"`
-	TTL         Duration   `yaml:"ttl"`
-	Secrets     Secrets    `yaml:"secret,omitempty"`
-	Consumers   []Consumer `yaml:"consumers,omitempty"`
+	Name        string   `yaml:"name"`
+	Kind        string   `yaml:"kind"`
+	Provider    string   `yaml:"provider"`
+	Env         string   `yaml:"env,omitempty"`
+	Service     string   `yaml:"service,omitempty"`
+	Description string   `yaml:"description"`
+	Scopes      []string `yaml:"scopes,omitempty"`
+	Import      *Import  `yaml:"import,omitempty"`
+	Disabled    bool     `yaml:"disabled,omitempty"`
+	// Track: orkeys keeps state and metrics of the imported key and does not change the key. Nil means the
+	// kind track_only. Load sets it from the kind.
+	Track     *bool      `yaml:"track_only,omitempty"`
+	Budget    Budget     `yaml:"budget"`
+	TTL       Duration   `yaml:"ttl"`
+	Secrets   Secrets    `yaml:"secret,omitempty"`
+	Consumers []Consumer `yaml:"consumers,omitempty"`
 
 	Team string `yaml:"-"`
 	Path string `yaml:"-"`
 }
+
+// TrackOnly reports whether orkeys only tracks the key: it saves the state and exports metrics, and it does not
+// set the limit, write secrets, sync consumers, rotate or revoke the key.
+func (k *Key) TrackOnly() bool { return k.Track != nil && *k.Track }
 
 // Budget is the limit set at the provider; the provider blocks the key when spend in the reset period reaches it.
 type Budget struct {

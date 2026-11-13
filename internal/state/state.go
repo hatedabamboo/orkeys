@@ -68,6 +68,8 @@ type State struct {
 	Provider string `json:"provider"`
 	Owner    string `json:"owner,omitempty"`
 	Purpose  string `json:"purpose,omitempty"`
+	// TrackOnly: orkeys only keeps the state of the key for metrics. It does not change, rotate or revoke the key.
+	TrackOnly bool `json:"track_only,omitempty"`
 
 	KeyID     string    `json:"key_id"`
 	CreatedAt time.Time `json:"created_at"`

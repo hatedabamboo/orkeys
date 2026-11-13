@@ -16,6 +16,8 @@ const (
 const (
 	EventKeyIssued           = "key_issued"
 	EventKeyImported         = "key_imported"
+	EventKeyTracked          = "key_tracked"
+	EventKeyUntracked        = "key_untracked"
 	EventKeyRevoked          = "key_revoked"
 	EventKeyDisabled         = "key_disabled"
 	EventKeyEnabled          = "key_enabled"
