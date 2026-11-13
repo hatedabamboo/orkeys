@@ -8,8 +8,10 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/hatedabamboo/orkeys/internal/provider"
+	"github.com/hatedabamboo/orkeys/internal/secrets"
 	"github.com/hatedabamboo/orkeys/internal/values"
 )
 
@@ -307,15 +309,18 @@ func validateManifestKey(inv *Inventory, k *Key, kp *KindPolicy, add func(string
 			strings.HasPrefix(sp+"/", strings.Trim(statePath, "/")+"/") {
 			add(p, "%s.path: must not be under the state path %s", where, statePath)
 		}
-		if own[sp+"#"+sec.Field] {
-			add(p, "%s: %s#%s is listed twice", where, sp, sec.Field)
+		validateSecretField(pol, p, where, sec.Field, add)
+		ref := sp + "#" + sec.Field
+		if own[ref] {
+			add(p, "%s: %s is listed twice", where, ref)
 			continue
 		}
-		own[sp+"#"+sec.Field] = true
-		if prev, ok := secretPaths[sp]; ok && prev != k.Name {
-			add(p, "%s.path: already used by %s", where, prev)
+		own[ref] = true
+		// Keys can share a secret path. Each field has its own metadata with the key ID.
+		if prev, ok := secretPaths[ref]; ok {
+			add(p, "%s: %s is already used by %s", where, ref, prev)
 		}
-		secretPaths[sp] = k.Name
+		secretPaths[ref] = k.Name
 	}
 	for i, c := range k.Consumers {
 		where := fmt.Sprintf("consumers[%d]", i)
@@ -331,6 +336,20 @@ func validateManifestKey(inv *Inventory, k *Key, kp *KindPolicy, add func(string
 			add(p, "%s: %s target %s is already written by %s", where, c.Type, ps.TargetID(), prev)
 		}
 		secretPaths[id] = k.Name
+	}
+}
+
+// awsTagKey is the character set of an AWS tag key.
+var awsTagKey = regexp.MustCompile(`^[\p{L}\p{Z}\p{N}_.:/=+\-@]*$`)
+
+// validateSecretField checks that the metadata names of field fit the secrets store. Vault custom metadata keys and
+// AWS tag keys are at most 128 characters. AWS tag keys allow only letters, digits, spaces and _.:/=+-@.
+func validateSecretField(pol *Policy, p, where, field string, add func(string, string, ...any)) {
+	if limit := 128 - utf8.RuneCountInString(secrets.FieldMetaName(secrets.MetaKeyID, "")); utf8.RuneCountInString(field) > limit {
+		add(p, "%s.field: longer than %d characters", where, limit)
+	}
+	if pol.Secrets == "aws" && !awsTagKey.MatchString(field) {
+		add(p, "%s.field: want only letters, digits, spaces and _.:/=+-@ (AWS tag keys)", where)
 	}
 }
 

@@ -170,23 +170,19 @@ func (s *fakeStore) Put(ctx context.Context, path, field, value string, meta map
 	}
 	s.secrets[path+"#"+field] = value
 	if meta != nil {
-		s.meta[path] = meta
+		s.meta[path+"#"+field] = meta
 	}
 	return nil
 }
 
-func (s *fakeStore) Meta(_ context.Context, path string) (map[string]string, error) {
-	return s.meta[path], nil
+// Meta returns the metadata of one field. The fake keeps metadata by path#field.
+func (s *fakeStore) Meta(_ context.Context, path, field string) (map[string]string, error) {
+	return s.meta[path+"#"+field], nil
 }
 
 func (s *fakeStore) DeleteField(_ context.Context, path, field string) error {
 	delete(s.secrets, path+"#"+field)
-	for k := range s.secrets {
-		if strings.HasPrefix(k, path+"#") {
-			return nil
-		}
-	}
-	delete(s.meta, path)
+	delete(s.meta, path+"#"+field)
 	return nil
 }
 

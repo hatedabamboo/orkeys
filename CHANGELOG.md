@@ -1,5 +1,16 @@
 # CHANGELOG
 
+## v0.4.2 (2026-11-13)
+
+- (change) Breaking: give the AWS role `secretsmanager:UntagResource`, and upgrade all runners together. orkeys
+  keeps the secret metadata (Vault custom metadata, AWS tags) per field: `orkeys-key.<field>`,
+  `orkeys-key-id.<field>`, `orkeys-team.<field>`. orkeys reads the old per-secret names for a field without its own
+  names, and the next write removes them. orkeys up to v0.4.1 does not read the new names
+- (feat) Two keys can use the same `secret.path` with different `secret.field`. `validate` reports only a
+  `path#field` that two keys use
+- (feat) `validate` checks `secret.field`: at most 114 characters, and with `secrets: aws` only letters, digits,
+  spaces and `_.:/=+-@`
+
 ## v0.4.1 (2026-11-13)
 
 - (change) `orkeys_unmanaged_keys` no longer counts disabled keys when `track_disabled` is `false` (the default), the

@@ -91,7 +91,7 @@ func TestResumeAfterCrashBeforeSecretWrite(t *testing.T) {
 	if st.Phase != state.PhaseReady || st.KeyID == lostID || st.KeyID == oldID {
 		t.Fatalf("after resume: %+v", st)
 	}
-	if v.store.meta[prodPath][secrets.MetaKeyID] != st.KeyID || v.store.secrets[prodPath+"#api_key"] == "secret-1" {
+	if v.store.meta[prodPath+"#api_key"][secrets.MetaKeyID] != st.KeyID || v.store.secrets[prodPath+"#api_key"] == "secret-1" {
 		t.Fatal("secret does not hold the reissued key")
 	}
 	var waiting []string
@@ -121,7 +121,7 @@ func TestResumeWhenOnlyTheLastStateWriteFailed(t *testing.T) {
 	}
 	_ = v.e.Apply(context.Background(), v.plan(t), ApplyOptions{})
 	st := v.store.states[prodKey]
-	if st.Phase != state.PhaseIssuing || v.store.meta[prodPath][secrets.MetaKeyID] != st.KeyID {
+	if st.Phase != state.PhaseIssuing || v.store.meta[prodPath+"#api_key"][secrets.MetaKeyID] != st.KeyID {
 		t.Fatalf("setup: %+v", st)
 	}
 
@@ -137,7 +137,7 @@ func TestResumeWhenOnlyTheLastStateWriteFailed(t *testing.T) {
 func TestPlanReissuesOnSecretDrift(t *testing.T) {
 	v := setup(t)
 	v.apply(t)
-	v.store.meta[prodPath] = map[string]string{secrets.MetaKeyID: "someone-else"}
+	v.store.meta[prodPath+"#api_key"] = map[string]string{secrets.MetaKeyID: "someone-else"}
 	p := v.plan(t)
 	if got := types(p); got != "reissue:"+prodKey || !strings.Contains(p.Actions[0].Detail, "holds key someone-els") {
 		t.Fatalf("plan: %s %v", got, p.Actions)
@@ -273,5 +273,44 @@ func TestInexactLastUseDoesNotBlockRevoke(t *testing.T) {
 	_ = v.rotate(t, RotateOptions{})
 	if v.or.find(oldID) != nil {
 		t.Fatal("an inexact last use must not keep the old key")
+	}
+}
+
+func TestTwoKeysInOneSecret(t *testing.T) {
+	v := setup(t)
+	err := os.WriteFile(filepath.Join(v.root, "teams/chat-core/prod-chat-core-agents.yaml"), []byte(`
+name: prod-chat-core-agents
+kind: production
+provider: openrouter
+env: prod
+service: agents
+description: Agent runs.
+budget:
+  limit: 100
+secret:
+  path: kv/llm/prod/chat-core/dialog
+  field: agents_key
+`), 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v.reload(t)
+	v.apply(t)
+	if p := v.plan(t); !p.Empty() {
+		t.Fatalf("plan after apply: %s %v", types(p), p.Actions)
+	}
+	dialog, agents := v.store.states[prodKey], v.store.states["prod-chat-core-agents"]
+	if v.store.meta[prodPath+"#api_key"][secrets.MetaKeyID] != dialog.KeyID ||
+		v.store.meta[prodPath+"#agents_key"][secrets.MetaKeyID] != agents.KeyID || dialog.KeyID == agents.KeyID {
+		t.Fatalf("metadata %v", v.store.meta)
+	}
+	if err := v.rotate(t, RotateOptions{Now: []string{prodKey}}); err != nil {
+		t.Fatal(err)
+	}
+	if v.store.states[prodKey].KeyID == dialog.KeyID || v.store.states["prod-chat-core-agents"].KeyID != agents.KeyID {
+		t.Fatal("rotate must change only the dialog key")
+	}
+	if p := v.plan(t); !p.Empty() {
+		t.Fatalf("plan after rotate of one key: %s %v", types(p), p.Actions)
 	}
 }

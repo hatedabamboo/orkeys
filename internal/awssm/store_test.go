@@ -14,6 +14,7 @@ type fakeSM struct {
 	values  map[string]string
 	tags    map[string]map[string]string
 	deleted map[string]int64
+	untags  int
 }
 
 func (f *fakeSM) GetSecretValue(_ context.Context, in *secretsmanager.GetSecretValueInput, _ ...func(*secretsmanager.Options)) (*secretsmanager.GetSecretValueOutput, error) {
@@ -68,6 +69,14 @@ func (f *fakeSM) TagResource(_ context.Context, in *secretsmanager.TagResourceIn
 	return &secretsmanager.TagResourceOutput{}, nil
 }
 
+func (f *fakeSM) UntagResource(_ context.Context, in *secretsmanager.UntagResourceInput, _ ...func(*secretsmanager.Options)) (*secretsmanager.UntagResourceOutput, error) {
+	f.untags++
+	for _, k := range in.TagKeys {
+		delete(f.tags[aws.ToString(in.SecretId)], k)
+	}
+	return &secretsmanager.UntagResourceOutput{}, nil
+}
+
 func (f *fakeSM) tag(name string, tags []types.Tag) {
 	if f.tags[name] == nil {
 		f.tags[name] = map[string]string{}
@@ -95,14 +104,14 @@ func TestSecretStore(t *testing.T) {
 	if err := s.Put(ctx, "app/new", "api_key", "sk1", map[string]string{"orkeys-key": "prod-a-b"}); err != nil {
 		t.Fatal(err)
 	}
-	if f.values["app/new"] != `{"api_key":"sk1"}` || f.tags["app/new"]["orkeys-key"] != "prod-a-b" {
+	if f.values["app/new"] != `{"api_key":"sk1"}` || f.tags["app/new"]["orkeys-key.api_key"] != "prod-a-b" {
 		t.Fatalf("create: %v %v", f.values, f.tags)
 	}
 	if err := s.Put(ctx, "app/x", "api_key", "sk2", map[string]string{"orkeys-key": "prod-c-d"}); err != nil {
 		t.Fatal(err)
 	}
 	got, err := s.Read(ctx, "app/x")
-	if err != nil || got["other"] != "keep" || got["api_key"] != "sk2" || f.tags["app/x"]["orkeys-key"] != "prod-c-d" {
+	if err != nil || got["other"] != "keep" || got["api_key"] != "sk2" || f.tags["app/x"]["orkeys-key.api_key"] != "prod-c-d" {
 		t.Fatalf("update: %v %v %v", got, err, f.tags)
 	}
 	if _, err := s.Read(ctx, "missing"); err == nil {
@@ -137,7 +146,7 @@ func TestPutRestoresSecretScheduledForDeletion(t *testing.T) {
 	if _, err := s.Read(ctx, "app/x"); err == nil {
 		t.Fatal("a secret scheduled for deletion must read as not found")
 	}
-	if m, err := s.Meta(ctx, "app/x"); err != nil || m != nil {
+	if m, err := s.Meta(ctx, "app/x", "api_key"); err != nil || m != nil {
 		t.Fatalf("meta of a deleted secret: %v %v", m, err)
 	}
 	if err := s.Put(ctx, "app/x", "token", "new", map[string]string{"orkeys-key-id": "k2"}); err != nil {
@@ -146,7 +155,53 @@ func TestPutRestoresSecretScheduledForDeletion(t *testing.T) {
 	if _, pending := f.deleted["app/x"]; pending || f.values["app/x"] != `{"token":"new"}` {
 		t.Fatalf("restore: deleted %v value %s", f.deleted, f.values["app/x"])
 	}
-	if m, _ := s.Meta(ctx, "app/x"); m["orkeys-key-id"] != "k2" {
+	if m, _ := s.Meta(ctx, "app/x", "token"); m["orkeys-key-id"] != "k2" {
 		t.Fatalf("meta %v", m)
+	}
+	if _, ok := f.tags["app/x"]["orkeys-key-id.api_key"]; ok {
+		t.Fatalf("restore must drop the tags of the dropped fields: %v", f.tags["app/x"])
+	}
+}
+
+func TestFieldTags(t *testing.T) {
+	f := &fakeSM{values: map[string]string{"app/x": `{"a":"old"}`}, tags: map[string]map[string]string{
+		"app/x": {"orkeys-key": "prod-a", "orkeys-key-id": "k0", "orkeys-team": "t", "owner": "infra"},
+	}, deleted: map[string]int64{}}
+	s := &SecretStore{API: f, RecoveryWindow: 7}
+	ctx := context.Background()
+
+	if m, _ := s.Meta(ctx, "app/x", "a"); m["orkeys-key-id"] != "k0" {
+		t.Fatalf("a field without own tags must read the per-secret tags: %v", m)
+	}
+	if err := s.Put(ctx, "app/x", "b", "sb", map[string]string{"orkeys-key": "prod-b", "orkeys-key-id": "kb"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := f.tags["app/x"]["orkeys-key-id"]; ok || f.tags["app/x"]["owner"] != "infra" {
+		t.Fatalf("put must drop the per-secret orkeys tags and keep other tags: %v", f.tags["app/x"])
+	}
+	if err := s.Put(ctx, "app/x", "a", "sa", map[string]string{"orkeys-key": "prod-a", "orkeys-key-id": "ka"}); err != nil {
+		t.Fatal(err)
+	}
+	if m, _ := s.Meta(ctx, "app/x", "a"); m["orkeys-key-id"] != "ka" {
+		t.Fatalf("meta a: %v", m)
+	}
+	if m, _ := s.Meta(ctx, "app/x", "b"); m["orkeys-key-id"] != "kb" || m["orkeys-key"] != "prod-b" {
+		t.Fatalf("meta b: %v", m)
+	}
+	untags := f.untags
+	if err := s.Put(ctx, "app/x", "a", "sa2", map[string]string{"orkeys-key": "prod-a", "orkeys-key-id": "ka2"}); err != nil {
+		t.Fatal(err)
+	}
+	if f.untags != untags {
+		t.Fatal("a put without stale tags must not call UntagResource")
+	}
+	if err := s.DeleteField(ctx, "app/x", "a"); err != nil {
+		t.Fatal(err)
+	}
+	if m, _ := s.Meta(ctx, "app/x", "a"); len(m) != 0 {
+		t.Fatalf("delete field must drop its tags: %v", m)
+	}
+	if m, _ := s.Meta(ctx, "app/x", "b"); m["orkeys-key-id"] != "kb" {
+		t.Fatalf("delete field must keep the tags of other fields: %v", m)
 	}
 }

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/hatedabamboo/orkeys/internal/secrets"
 	"github.com/hatedabamboo/orkeys/internal/state"
 )
 
@@ -117,6 +118,8 @@ type SecretStore struct {
 }
 
 // Put writes the value before the custom metadata. Then metadata with a key ID proves that the field holds that key.
+// The metadata write reads and replaces all custom metadata. Vault has no check-and-set for metadata. The state lock
+// keeps two orkeys runs from writing at the same time.
 func (s *SecretStore) Put(ctx context.Context, path, field, value string, meta map[string]string) error {
 	if err := s.C.Patch(ctx, path, map[string]any{field: value}); err != nil {
 		return err
@@ -124,26 +127,49 @@ func (s *SecretStore) Put(ctx context.Context, path, field, value string, meta m
 	if len(meta) == 0 {
 		return nil
 	}
-	return s.C.SetCustomMetadata(ctx, path, meta)
+	cur, err := s.C.CustomMetadata(ctx, path)
+	if err != nil {
+		return err
+	}
+	return s.C.SetCustomMetadata(ctx, path, secrets.SetFieldMeta(cur, field, meta))
 }
 
-// DeleteField removes one field with check-and-set. It destroys the secret when no field is left.
+// DeleteField removes one field with check-and-set, then its custom metadata. It destroys the secret when no field
+// is left.
 func (s *SecretStore) DeleteField(ctx context.Context, path, field string) error {
-	return s.C.Update(ctx, path, func(cur map[string]any) (map[string]any, bool) {
+	destroyed := false
+	err := s.C.Update(ctx, path, func(cur map[string]any) (map[string]any, bool) {
 		if _, ok := cur[field]; !ok {
 			return nil, false
 		}
 		delete(cur, field)
 		if len(cur) == 0 {
+			destroyed = true
 			return nil, true
 		}
 		return cur, true
 	})
+	if err != nil || destroyed {
+		return err
+	}
+	cur, err := s.C.CustomMetadata(ctx, path)
+	if err != nil || cur == nil {
+		return err
+	}
+	next := secrets.DropFieldMeta(cur, field)
+	if len(next) == len(cur) {
+		return nil
+	}
+	return s.C.SetCustomMetadata(ctx, path, next)
 }
 
-// Meta returns the custom metadata of the secret at path, or nil when it does not exist.
-func (s *SecretStore) Meta(ctx context.Context, path string) (map[string]string, error) {
-	return s.C.CustomMetadata(ctx, path)
+// Meta returns the custom metadata of one field, or nil when the secret does not exist.
+func (s *SecretStore) Meta(ctx context.Context, path, field string) (map[string]string, error) {
+	cur, err := s.C.CustomMetadata(ctx, path)
+	if err != nil {
+		return nil, err
+	}
+	return secrets.FieldMeta(cur, field), nil
 }
 
 func (s *SecretStore) Read(ctx context.Context, path string) (map[string]string, error) {

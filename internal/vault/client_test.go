@@ -112,20 +112,23 @@ func TestStore(t *testing.T) {
 	if err := sec.Put(ctx, "kv/app/x", "api_key", "sk", map[string]string{"orkeys-key": "prod-a-b"}); err != nil {
 		t.Fatal(err)
 	}
-	if f.data["kv/app/x"]["other"] != "keep" || f.data["kv/app/x"]["api_key"] != "sk" || f.meta["kv/app/x"]["orkeys-key"] != "prod-a-b" {
+	if f.data["kv/app/x"]["other"] != "keep" || f.data["kv/app/x"]["api_key"] != "sk" || f.meta["kv/app/x"]["orkeys-key.api_key"] != "prod-a-b" {
 		t.Fatalf("secret: %v %v", f.data["kv/app/x"], f.meta)
 	}
 	if got, err := sec.Read(ctx, "kv/app/x"); err != nil || got["api_key"] != "sk" {
 		t.Fatalf("read: %v %v", got, err)
 	}
-	if m, err := sec.Meta(ctx, "kv/app/x"); err != nil || m["orkeys-key"] != "prod-a-b" {
+	if m, err := sec.Meta(ctx, "kv/app/x", "api_key"); err != nil || m["orkeys-key"] != "prod-a-b" {
 		t.Fatalf("meta: %v %v", m, err)
 	}
-	if m, err := sec.Meta(ctx, "kv/app/none"); err != nil || m != nil {
+	if m, err := sec.Meta(ctx, "kv/app/none", "api_key"); err != nil || m != nil {
 		t.Fatalf("meta of a missing secret: %v %v", m, err)
 	}
 	if err := sec.DeleteField(ctx, "kv/app/x", "api_key"); err != nil || f.data["kv/app/x"]["api_key"] != nil || f.data["kv/app/x"]["other"] != "keep" {
 		t.Fatalf("delete field: %v %v", err, f.data["kv/app/x"])
+	}
+	if _, ok := f.meta["kv/app/x"]["orkeys-key.api_key"]; ok {
+		t.Fatalf("delete field must drop its metadata: %v", f.meta["kv/app/x"])
 	}
 	if err := sec.DeleteField(ctx, "kv/app/x", "other"); err != nil || f.data["kv/app/x"] != nil {
 		t.Fatalf("delete of the last field must destroy the secret: %v %v", err, f.data)
@@ -135,6 +138,42 @@ func TestStore(t *testing.T) {
 	}
 	if _, err := New(srv.URL, "bad").Read(ctx, "kv/app/x"); err == nil {
 		t.Fatal("want 403 error")
+	}
+}
+
+func TestFieldMetadata(t *testing.T) {
+	f := &fakeVault{data: map[string]map[string]any{"kv/app/x": {"a": "old"}}, meta: map[string]map[string]string{
+		"kv/app/x": {"orkeys-key": "prod-a", "orkeys-key-id": "k0", "orkeys-team": "t", "owner": "infra"},
+	}}
+	srv := httptest.NewServer(f)
+	defer srv.Close()
+	sec := &SecretStore{C: New(srv.URL, "t")}
+	ctx := context.Background()
+
+	if m, _ := sec.Meta(ctx, "kv/app/x", "a"); m["orkeys-key-id"] != "k0" {
+		t.Fatalf("a field without own metadata must read the per-secret metadata: %v", m)
+	}
+	if err := sec.Put(ctx, "kv/app/x", "b", "sb", map[string]string{"orkeys-key-id": "kb"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := f.meta["kv/app/x"]["orkeys-key-id"]; ok || f.meta["kv/app/x"]["owner"] != "infra" {
+		t.Fatalf("put must drop the per-secret orkeys metadata and keep other metadata: %v", f.meta["kv/app/x"])
+	}
+	if err := sec.Put(ctx, "kv/app/x", "a", "sa", map[string]string{"orkeys-key-id": "ka"}); err != nil {
+		t.Fatal(err)
+	}
+	ma, _ := sec.Meta(ctx, "kv/app/x", "a")
+	mb, _ := sec.Meta(ctx, "kv/app/x", "b")
+	if ma["orkeys-key-id"] != "ka" || mb["orkeys-key-id"] != "kb" {
+		t.Fatalf("meta a %v, b %v", ma, mb)
+	}
+	if err := sec.DeleteField(ctx, "kv/app/x", "a"); err != nil {
+		t.Fatal(err)
+	}
+	ma, _ = sec.Meta(ctx, "kv/app/x", "a")
+	mb, _ = sec.Meta(ctx, "kv/app/x", "b")
+	if len(ma) != 0 || mb["orkeys-key-id"] != "kb" {
+		t.Fatalf("after delete: meta a %v, b %v", ma, mb)
 	}
 }
 
