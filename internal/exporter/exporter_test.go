@@ -35,10 +35,11 @@ func (p *prov) Create(context.Context, provider.Spec) (provider.Key, string, err
 func (p *prov) Delete(context.Context, string) error { return nil }
 
 func TestMetrics(t *testing.T) {
-	spend, month := 42.5, 99.0
+	spend, month, limit, usage := 42.5, 99.0, 250.0, 1234.5
 	used := time.Unix(1700000000, 0)
 	p := &prov{keys: []provider.Key{
-		{ID: "k1", SpendWeekUSD: &spend, SpendMonthUSD: &month, LastUsedAt: &used},
+		{ID: "k1", SpendWeekUSD: &spend, SpendMonthUSD: &month, LastUsedAt: &used, LimitUSD: &limit, UsageUSD: &usage,
+			CreatedAt: time.Unix(1600000000, 0)},
 		{ID: "old"}, {ID: "rogue"}, {ID: "self"},
 	}, caps: provider.Caps{PerKeyLimit: true}}
 	x := &Exporter{
@@ -46,9 +47,11 @@ func TestMetrics(t *testing.T) {
 			Name: "prod-a-b", Team: "a", Kind: "production", Env: "prod", Provider: "openrouter", KeyID: "k1",
 			LimitUSD: 200, LimitReset: "weekly", ExpiresAt: time.Unix(1800000000, 0),
 			NotifyChannel: "#a-notifications", AlertChannel: "#a-alerts",
-			PendingRevokes: []state.PendingRevoke{{KeyID: "old"}},
+			CreatedAt:      time.Unix(1700000000, 0),
+			PendingRevokes: []state.PendingRevoke{{KeyID: "old", After: time.Unix(1790000000, 0)}, {KeyID: "older", After: time.Unix(1780000000, 0)}},
 		}},
 		Providers: provider.Set{"openrouter": p},
+		Version:   "v0.4.3",
 		Log:       &strings.Builder{},
 	}
 	x.Poll(context.Background())
@@ -58,7 +61,13 @@ func TestMetrics(t *testing.T) {
 	labels := `{name="prod-a-b",team="a",kind="production",env="prod",provider="openrouter",service="",owner="",notify_channel="#a-notifications",alert_channel="#a-alerts",reset="weekly"}`
 	for _, want := range []string{
 		"orkeys_key_spend_usd" + labels + " 42.5",
-		"orkeys_key_hard_limit_usd" + labels + " 200",
+		"orkeys_key_hard_limit_usd" + labels + " 250",
+		"orkeys_key_usage_usd_total" + labels + " 1234.5",
+		"# TYPE orkeys_key_usage_usd_total counter",
+		"orkeys_key_created_timestamp_seconds" + labels + " 1.6e+09",
+		"orkeys_key_pending_revoke_timestamp_seconds" + labels + " 1.78e+09",
+		"orkeys_key_disabled" + labels + " 0",
+		`orkeys_exporter_build_info{version="v0.4.3"} 1`,
 		"orkeys_key_budget_usd" + labels + " 200",
 		"orkeys_key_expires_timestamp_seconds" + labels + " 1.8e+09",
 		"orkeys_key_last_used_timestamp_seconds" + labels + " 1.7e+09",
@@ -270,5 +279,47 @@ func TestPolicyFromStore(t *testing.T) {
 	store.p = &state.StoredPolicy{YAML: "providers: [\n"}
 	if out = scrape(); !strings.Contains(out, `orkeys_unmanaged_keys{provider="openrouter"} 0`) {
 		t.Errorf("a broken copy must keep the last policy:\n%s", out)
+	}
+}
+
+func TestDisabledAndFallbackMetrics(t *testing.T) {
+	x := &Exporter{
+		Store: states{
+			{Name: "prod-a-planned", Provider: "openrouter", KeyID: "p1", LimitUSD: 10, Disabled: true},
+			{Name: "prod-a-outside", Provider: "openrouter", KeyID: "o1", LimitUSD: 10},
+			{Name: "prod-a-gone", Provider: "openrouter", KeyID: "g1", LimitUSD: 10, CreatedAt: time.Unix(1700000000, 0)},
+			{Name: "prod-a-nolimit", Provider: "openrouter", KeyID: "n1", LimitUSD: 10},
+		},
+		Providers: provider.Set{"openrouter": &prov{keys: []provider.Key{
+			{ID: "p1", Disabled: true}, {ID: "o1", Disabled: true}, {ID: "n1"},
+		}, caps: provider.Caps{PerKeyLimit: true}}},
+		Log: &strings.Builder{},
+	}
+	x.Poll(context.Background())
+	rec := httptest.NewRecorder()
+	x.ServeHTTP(rec, httptest.NewRequest("GET", "/metrics", nil))
+	out := rec.Body.String()
+	for _, want := range []string{
+		`orkeys_key_disabled{name="prod-a-planned",team="",kind="",env="",provider="openrouter",service="",owner="",notify_channel="",alert_channel="",reset="monthly"} 1`,
+		`orkeys_key_disabled{name="prod-a-outside",team="",kind="",env="",provider="openrouter",service="",owner="",notify_channel="",alert_channel="",reset="monthly"} 2`,
+		`orkeys_key_disabled{name="prod-a-nolimit",team="",kind="",env="",provider="openrouter",service="",owner="",notify_channel="",alert_channel="",reset="monthly"} 0`,
+		`orkeys_key_hard_limit_usd{name="prod-a-gone",team="",kind="",env="",provider="openrouter",service="",owner="",notify_channel="",alert_channel="",reset="monthly"} 10`,
+		`orkeys_key_created_timestamp_seconds{name="prod-a-gone",team="",kind="",env="",provider="openrouter",service="",owner="",notify_channel="",alert_channel="",reset="monthly"} 1.7e+09`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in:\n%s", want, out)
+		}
+	}
+	for _, unwanted := range []string{
+		`orkeys_key_disabled{name="prod-a-gone"`,
+		`orkeys_key_hard_limit_usd{name="prod-a-nolimit"`,
+		`orkeys_key_created_timestamp_seconds{name="prod-a-planned"`,
+		"orkeys_key_pending_revoke_timestamp_seconds",
+		"orkeys_key_usage_usd_total",
+		"orkeys_exporter_build_info",
+	} {
+		if strings.Contains(out, unwanted) {
+			t.Errorf("unexpected %q in:\n%s", unwanted, out)
+		}
 	}
 }

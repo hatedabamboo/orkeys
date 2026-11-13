@@ -237,6 +237,8 @@ func (e *Engine) plan(ctx context.Context) (*Plan, map[string][]provider.Key, er
 			continue
 		}
 		caps := p.Caps()
+		// Disable and enable save the disabled field of the state. Without them, update-state saves it.
+		toggle := true
 		switch {
 		case k.Disabled && !cur.Disabled:
 			a := act
@@ -250,6 +252,8 @@ func (e *Engine) plan(ctx context.Context) (*Plan, map[string][]provider.Key, er
 				a.Detail += fmt.Sprintf("; limit $%.2f %s", limit, k.Budget.ResetOrDefault())
 			}
 			plan.Actions = append(plan.Actions, a)
+		default:
+			toggle = false
 		}
 		if caps.PerKeyLimit && !cur.Disabled && !k.Disabled {
 			resetDiff := caps.LimitReset && cur.LimitReset != k.Budget.ResetOrDefault()
@@ -260,7 +264,11 @@ func (e *Engine) plan(ctx context.Context) (*Plan, map[string][]provider.Key, er
 				plan.Actions = append(plan.Actions, a)
 			}
 		}
-		if d := metaDiff(st, want); d != "" {
+		d := metaDiff(st, want)
+		if !toggle && st.Disabled != want.Disabled {
+			d = strings.TrimPrefix(d+fmt.Sprintf(", disabled %v -> %v", st.Disabled, want.Disabled), ", ")
+		}
+		if d != "" {
 			a := act
 			a.Type, a.Detail = ActUpdateState, d
 			plan.Actions = append(plan.Actions, a)

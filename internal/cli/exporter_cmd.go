@@ -147,7 +147,7 @@ func (a *app) exporterCmd() *cobra.Command {
 				}
 				providers[name] = p
 			}
-			x := &exporter.Exporter{Store: st, Providers: providers, Policy: cfg.Policy, PolicyFromStore: fromStore, Interval: interval}
+			x := &exporter.Exporter{Store: st, Providers: providers, Policy: cfg.Policy, PolicyFromStore: fromStore, Version: a.version, Interval: interval}
 			go x.Run(ctx)
 			srv := &http.Server{Addr: listen, Handler: x, ReadHeaderTimeout: 10 * time.Second}
 			go func() {

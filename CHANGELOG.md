@@ -7,6 +7,14 @@
   second copy of `policy.yaml` from the exporter deployment. The copy exists after the first `apply` with this version
 - (feat) The exporter exports `orkeys_key_track_only`: 1 for a key with `track_only: true`, 0 for a managed key.
   Alert rules use it to tell a tracked key, which a person renews, from a key that `rotate` renews
+- (change) The first `plan` shows `update-state` with `disabled false -> true` for each key with `disabled: true`. The
+  state saves `disabled` from the manifest. The exporter exports `orkeys_key_disabled`: 0 enabled, 1 disabled by the
+  manifest, 2 disabled at the provider and not in the manifest
+- (change) `orkeys_key_hard_limit_usd` of a managed key shows the limit that the provider reports, not
+  `budget.limit`. A limit changed outside orkeys is now visible. A key without a limit at the provider has no series
+- (feat) The exporter exports `orkeys_key_usage_usd_total` (counter of the provider usage),
+  `orkeys_key_created_timestamp_seconds`, `orkeys_key_pending_revoke_timestamp_seconds` (earliest revoke time of an
+  old key after a rotation) and `orkeys_exporter_build_info{version}`
 
 ## v0.4.2 (2026-11-13)
 

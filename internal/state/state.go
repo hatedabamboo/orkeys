@@ -70,6 +70,9 @@ type State struct {
 	Purpose  string `json:"purpose,omitempty"`
 	// TrackOnly: orkeys only keeps the state of the key for metrics. It does not change, rotate or revoke the key.
 	TrackOnly bool `json:"track_only,omitempty"`
+	// Disabled is disabled: true in the manifest. The exporter uses it to tell a planned disable from a disable
+	// outside orkeys.
+	Disabled bool `json:"disabled,omitempty"`
 
 	KeyID     string    `json:"key_id"`
 	CreatedAt time.Time `json:"created_at"`

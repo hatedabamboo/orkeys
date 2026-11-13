@@ -102,7 +102,8 @@ func (e *Engine) applyOne(ctx context.Context, a Action) error {
 			return err
 		}
 		e.emit(a.State, LevelInfo, EventKeyDisabled, "key %s disabled: %s", short(a.State.KeyID), a.Detail)
-		return nil
+		a.State.Disabled = a.Key.Disabled
+		return e.putState(ctx, a.State)
 
 	case ActEnable:
 		d, err := e.disabler(a.Provider)
@@ -118,7 +119,8 @@ func (e *Engine) applyOne(ctx context.Context, a Action) error {
 			return err
 		}
 		e.emit(a.State, LevelInfo, EventKeyEnabled, "key %s enabled: %s", short(a.State.KeyID), a.Detail)
-		return nil
+		a.State.Disabled = a.Key.Disabled
+		return e.putState(ctx, a.State)
 
 	case ActDelete:
 		return e.remove(ctx, a.State, "manifest removed")

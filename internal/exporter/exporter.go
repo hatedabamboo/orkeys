@@ -36,9 +36,11 @@ type Exporter struct {
 	// PolicyFromStore: each poll reads Policy again from the copy in Store. Store must be a PolicySource.
 	// A new provider in that copy needs a restart: the exporter makes the provider clients at start.
 	PolicyFromStore bool
-	Interval        time.Duration
-	Log             io.Writer
-	Now             func() time.Time
+	// Version is the orkeys version for orkeys_exporter_build_info.
+	Version  string
+	Interval time.Duration
+	Log      io.Writer
+	Now      func() time.Time
 
 	mu       sync.RWMutex
 	body     []byte
@@ -188,12 +190,20 @@ type writer struct {
 }
 
 func (w *writer) gauge(name, help string, labels []string, v float64) {
+	w.sample("gauge", name, help, labels, v)
+}
+
+func (w *writer) counter(name, help string, labels []string, v float64) {
+	w.sample("counter", name, help, labels, v)
+}
+
+func (w *writer) sample(typ, name, help string, labels []string, v float64) {
 	if w.seen == nil {
 		w.seen = map[string]bool{}
 	}
 	if !w.seen[name] {
 		w.seen[name] = true
-		fmt.Fprintf(&w.buf, "# HELP %s %s\n# TYPE %s gauge\n", name, help, name)
+		fmt.Fprintf(&w.buf, "# HELP %s %s\n# TYPE %s %s\n", name, help, name, typ)
 	}
 	w.buf.WriteString(name)
 	if len(labels) > 0 {
@@ -239,17 +249,30 @@ func (x *Exporter) render() []byte {
 			w.gauge("orkeys_key_budget_usd", "Budget from the manifest in USD, per period (label reset).", l, st.LimitUSD)
 		},
 		func(st *state.State, l []string, k *provider.Key) {
-			const help = "Limit set at the provider in USD, per period (label reset)."
-			// orkeys does not set the limit of a tracked key. The provider reports the limit that someone else set.
-			if st.TrackOnly {
-				if k != nil && k.LimitUSD != nil {
+			const help = "Limit at the provider in USD, per period (label reset)."
+			// A provider without a per-key limit does not enforce the budget, so there is no hard limit to show.
+			// A tracked key can have a limit that someone set at the provider.
+			p, ok := x.Providers[st.Provider]
+			if !st.TrackOnly && (!ok || !p.Caps().PerKeyLimit) {
+				return
+			}
+			// The value from the provider shows a limit that someone changed outside orkeys. No value means no
+			// limit: the key has no series, and the alerts for keys without a hard limit apply.
+			if k != nil {
+				if k.LimitUSD != nil {
 					w.gauge("orkeys_key_hard_limit_usd", help, l, *k.LimitUSD)
 				}
 				return
 			}
-			// A provider without a per-key limit does not enforce the budget, so there is no hard limit to show.
-			if p, ok := x.Providers[st.Provider]; ok && p.Caps().PerKeyLimit {
+			if !st.TrackOnly {
 				w.gauge("orkeys_key_hard_limit_usd", help, l, st.LimitUSD)
+			}
+		},
+		func(st *state.State, l []string, k *provider.Key) {
+			// The provider value is a counter of the current key. A new key after a rotation and the start of a
+			// month at DeepInfra and OpenAI reset it. rate() and increase() handle the reset.
+			if k != nil && k.UsageUSD != nil {
+				w.counter("orkeys_key_usage_usd_total", "Usage of the key in USD as the provider reports it. Resets at rotation; DeepInfra and OpenAI reset it monthly.", l, *k.UsageUSD)
 			}
 		},
 		func(st *state.State, l []string, _ *provider.Key) {
@@ -263,8 +286,30 @@ func (x *Exporter) render() []byte {
 				w.gauge("orkeys_key_last_used_timestamp_seconds", "Last use of the key.", l, float64(k.LastUsedAt.Unix()))
 			}
 		},
+		func(st *state.State, l []string, k *provider.Key) {
+			// The state time of an imported key is the time of the import. The provider knows the real time.
+			t := st.CreatedAt
+			if k != nil && k.CreatedAt.Unix() > 0 {
+				t = k.CreatedAt
+			}
+			if !t.IsZero() {
+				w.gauge("orkeys_key_created_timestamp_seconds", "Creation time of the key.", l, float64(t.Unix()))
+			}
+		},
 		func(st *state.State, l []string, _ *provider.Key) {
 			w.gauge("orkeys_key_rotation_state", "0 idle, 1 consumers not synced, 2 old key waits for revoke, 4 failed.", l, rotationValue(st))
+		},
+		func(st *state.State, l []string, _ *provider.Key) {
+			var first time.Time
+			for _, pr := range st.PendingRevokes {
+				if !pr.After.IsZero() && (first.IsZero() || pr.After.Before(first)) {
+					first = pr.After
+				}
+			}
+			if first.IsZero() {
+				return
+			}
+			w.gauge("orkeys_key_pending_revoke_timestamp_seconds", "Earliest planned revoke time of an old key. rotate holds the revoke while the old key is in use.", l, float64(first.Unix()))
 		},
 		func(st *state.State, l []string, k *provider.Key) {
 			v := 0.0
@@ -272,6 +317,19 @@ func (x *Exporter) render() []byte {
 				v = 1
 			}
 			w.gauge("orkeys_key_missing", "1 if the key in state is not found at the provider.", l, v)
+		},
+		func(st *state.State, l []string, k *provider.Key) {
+			if k == nil {
+				return
+			}
+			v := 0.0
+			switch {
+			case k.Disabled && st.Disabled:
+				v = 1
+			case k.Disabled:
+				v = 2
+			}
+			w.gauge("orkeys_key_disabled", "0 enabled, 1 disabled by the manifest (disabled: true), 2 disabled at the provider and not in the manifest.", l, v)
 		},
 		// A separate series and not a label: a new label on the other series changes their identity.
 		func(st *state.State, l []string, _ *provider.Key) {
@@ -339,6 +397,9 @@ func (x *Exporter) render() []byte {
 	}
 	if !x.stateAt.IsZero() {
 		w.gauge("orkeys_state_last_load_timestamp_seconds", "Time of the last successful state load.", nil, float64(x.stateAt.Unix()))
+	}
+	if x.Version != "" {
+		w.gauge("orkeys_exporter_build_info", "Always 1. The label version is the orkeys version of the exporter.", []string{"version", x.Version}, 1)
 	}
 	if x.PolicyFromStore && !x.policyAt.IsZero() {
 		w.gauge("orkeys_policy_last_load_timestamp_seconds", "Time of the last successful load of policy.yaml from the state store.", nil, float64(x.policyAt.Unix()))

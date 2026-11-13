@@ -535,6 +535,11 @@ Remove `disabled: true` (or set `false`) to enable the key again. This works onl
 
 With `track_disabled: true`, a key disabled by hand (`orkeys or disable`) is enabled again on the next `apply`.
 
+The state saves the manifest value of `disabled`. The exporter uses it in `orkeys_key_disabled` to tell a planned
+disable from a disable outside orkeys. A state from orkeys before v0.4.3 has no such field: the first `plan` shows
+`update-state` with `disabled false -> true` for each disabled key. With `track_disabled: false`, the removal of
+`disabled: true` also gives `update-state`: the key stays disabled, and `orkeys_key_disabled` shows `2`.
+
 `track_disabled` is also the default for provider keys without a manifest. With `false`, `plan`, `orkeys import` and
 the exporter ignore such keys when they are disabled. With `true`, they report them. The provider option
 `ignore_disabled` replaces this default for one provider. See [Keys without a manifest](#keys-without-a-manifest).
@@ -899,17 +904,22 @@ this rule is the only control of spend: OpenAI does not stop a key at its budget
 |---|---|
 | `orkeys_key_spend_usd` | Spend in the current limit period (`reset`: today, this week or this month) |
 | `orkeys_key_budget_usd` | `budget.limit` from the manifest for the same period |
-| `orkeys_key_hard_limit_usd` | Limit at the provider for the same period. Not for providers without a per-key limit (OpenAI). Tracked keys: the limit that the provider reports |
+| `orkeys_key_hard_limit_usd` | Limit that the provider reports for the same period. A limit changed outside orkeys shows here, and differs from `orkeys_key_budget_usd`. No series for a key without a limit at the provider, and for providers without a per-key limit (OpenAI). A key missing at the provider shows `budget.limit` |
+| `orkeys_key_usage_usd_total` | Counter of the key usage in USD, as the provider reports it. Use `increase()` or `rate()`. It resets at each rotation; DeepInfra and OpenAI also reset it at the start of each month. OpenAI data is hours late |
 | `orkeys_key_expires_timestamp_seconds` | Expiry. Not for a tracked key without a provider expiry |
 | `orkeys_key_last_used_timestamp_seconds` | Last use (OpenRouter and OpenAI). OpenRouter reports the request time for recently used keys, so treat it as "recently used", not as an exact time |
+| `orkeys_key_created_timestamp_seconds` | Creation time of the key at the provider. When the provider does not report it: the time when orkeys created or adopted the key |
 | `orkeys_key_rotation_state` | 0 idle, 1 consumers not synced, 2 old key waits for revoke, 4 failed |
+| `orkeys_key_pending_revoke_timestamp_seconds` | Earliest planned revoke time of an old key after a rotation. `rotate` holds the revoke while the old key is in use. A value far in the past means that a consumer still uses the old key |
 | `orkeys_key_missing` | 1 if the key is not found at the provider |
+| `orkeys_key_disabled` | 0 enabled, 1 disabled by the manifest (`disabled: true`), 2 disabled at the provider and not in the manifest. DeepInfra: a limit of 0 is disabled. No series for a missing key |
 | `orkeys_key_track_only` | 1 if the key has `track_only: true`: orkeys does not rotate it, and a person must renew it before `orkeys_key_expires_timestamp_seconds`. 0 for a managed key |
 | `orkeys_unmanaged_keys{provider}` | Provider keys without state that the provider options do not ignore. Not exported with `report_unmanaged: false`. The exporter reads the options from `--policy` or from the copy in the state store |
 | `orkeys_provider_poll_success{provider}` | 1 if the last poll worked |
 | `orkeys_provider_last_poll_timestamp_seconds{provider}` | Last successful poll |
 | `orkeys_state_last_load_timestamp_seconds` | Last successful state load |
 | `orkeys_policy_last_load_timestamp_seconds` | Last successful load of `policy.yaml` from the state store. Not exported with `--policy`. Alert when it is older than 30m |
+| `orkeys_exporter_build_info{version}` | Always 1. `version` is the orkeys version of the exporter. CI and the exporter must read the same state and policy format, so compare it with the version in CI |
 | `orkeys_last_success_timestamp_seconds{operation}` | Last successful `apply`, `rotate`, `hygiene`, `request`, `revoke`. Alert when `rotate` is older than 2h: without it, keys with a native expiry expire at the provider |
 
 The exporter runs all the time with the management keys. Give it its own management keys where the provider allows

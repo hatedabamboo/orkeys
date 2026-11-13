@@ -554,10 +554,18 @@ func TestDisabledKey(t *testing.T) {
 		t.Fatal("rotate --now on a disabled key must fail")
 	}
 
-	// Without track_disabled, removing the field does not enable the key.
+	if st, _ := v.store.GetState(context.Background(), prodKey); !st.Disabled {
+		t.Fatal("state of a disabled key must have disabled: true")
+	}
+
+	// Without track_disabled, removing the field does not enable the key. The state saves the manifest value.
 	v.edit(t, f, "disabled: true", "")
-	if got := types(v.plan(t)); got != "" {
-		t.Fatalf("plan without track_disabled: %s", got)
+	if p := v.plan(t); types(p) != "update-state:"+prodKey || p.Actions[0].Detail != "disabled true -> false" {
+		t.Fatalf("plan without track_disabled: %s %+v", types(p), p.Actions)
+	}
+	v.apply(t)
+	if !v.or.keys[0].Disabled {
+		t.Fatal("key enabled without track_disabled")
 	}
 
 	// With track_disabled, plan enables the key again.
@@ -577,6 +585,23 @@ func TestDisabledKey(t *testing.T) {
 	}
 }
 
+func TestDisabledKeyOldState(t *testing.T) {
+	v := setup(t)
+	f := "teams/chat-core/" + prodKey + ".yaml"
+	v.edit(t, f, "ttl: 90d", "ttl: 90d\ndisabled: true")
+	v.apply(t)
+	ctx := context.Background()
+	st, _ := v.store.GetState(ctx, prodKey)
+	st.Disabled = false
+	if err := v.store.PutState(ctx, st); err != nil {
+		t.Fatal(err)
+	}
+	// A state from an older orkeys has no disabled field. The plan saves it without a change at the provider.
+	if p := v.plan(t); types(p) != "update-state:"+prodKey || p.Actions[0].Detail != "disabled false -> true" {
+		t.Fatalf("plan: %s %+v", types(p), p.Actions)
+	}
+}
+
 func TestDisableDeepInfraKey(t *testing.T) {
 	v := setup(t)
 	v.edit(t, "policy.yaml", "secrets: vault", "secrets: vault\ntrack_disabled: true")
@@ -589,6 +614,12 @@ func TestDisableDeepInfraKey(t *testing.T) {
 	v.apply(t)
 	if !v.di.keys[0].Disabled {
 		t.Fatal("deepinfra key not disabled")
+	}
+	if st, _ := v.store.GetState(context.Background(), stagingKey); !st.Disabled {
+		t.Fatal("disable must save disabled: true in the state")
+	}
+	if got := types(v.plan(t)); got != "" {
+		t.Fatalf("plan after disable: %s", got)
 	}
 	v.edit(t, f, "disabled: true", "")
 	v.apply(t)
