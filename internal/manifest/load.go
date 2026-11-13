@@ -90,8 +90,38 @@ func Load(root string) (*Inventory, error) {
 }
 
 func LoadPolicy(path string) (*Policy, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		p := &Policy{}
+		p.setDefaults()
+		return p, err
+	}
+	p, err := decodePolicy(data, true)
+	if err != nil {
+		return p, fmt.Errorf("%s: %w", path, err)
+	}
+	return p, nil
+}
+
+// ParsePolicy reads the copy of policy.yaml from the state store. It ignores fields that this build does not know:
+// a newer orkeys can write the copy. It does not validate the policy. apply validated it before the write.
+func ParsePolicy(data []byte) (*Policy, error) {
+	return decodePolicy(data, false)
+}
+
+func decodePolicy(data []byte, strict bool) (*Policy, error) {
 	p := &Policy{}
-	err := decodeFile(path, p)
+	var err error
+	if strict {
+		err = checkProviderFields(data)
+	}
+	if err == nil {
+		dec := yaml.NewDecoder(bytes.NewReader(data))
+		dec.KnownFields(strict)
+		if err = dec.Decode(p); errors.Is(err, io.EOF) {
+			err = nil
+		}
+	}
 	p.setDefaults()
 	return p, err
 }

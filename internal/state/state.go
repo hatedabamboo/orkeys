@@ -70,6 +70,9 @@ type State struct {
 	Purpose  string `json:"purpose,omitempty"`
 	// TrackOnly: orkeys only keeps the state of the key for metrics. It does not change, rotate or revoke the key.
 	TrackOnly bool `json:"track_only,omitempty"`
+	// Disabled is disabled: true in the manifest. The exporter uses it to tell a planned disable from a disable
+	// outside orkeys.
+	Disabled bool `json:"disabled,omitempty"`
 
 	KeyID     string    `json:"key_id"`
 	CreatedAt time.Time `json:"created_at"`
@@ -190,6 +193,35 @@ func (s *State) KnownIDs() []string {
 type Heartbeats interface {
 	PutHeartbeat(ctx context.Context, operation string, t time.Time) error
 	Heartbeats(ctx context.Context) (map[string]time.Time, error)
+}
+
+// StoredPolicy is the copy of policy.yaml in the state store.
+type StoredPolicy struct {
+	// YAML is the file content as apply read it.
+	YAML string `json:"policy_yaml"`
+	// UpdatedAt is the time of the last change of YAML.
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// Policies keeps one copy of policy.yaml next to the states. apply writes it after a successful run.
+// The exporter reads it. Then the exporter needs no second copy of the file.
+type Policies interface {
+	PutPolicy(ctx context.Context, p *StoredPolicy) error
+	// GetPolicy returns nil, nil when the store has no copy.
+	GetPolicy(ctx context.Context) (*StoredPolicy, error)
+}
+
+// SavePolicy writes data as the stored policy if it differs from the stored copy. It reports whether it wrote.
+// An equal copy is not written again: Vault keeps a version for each write.
+func SavePolicy(ctx context.Context, ps Policies, data []byte, now time.Time) (bool, error) {
+	cur, err := ps.GetPolicy(ctx)
+	if err != nil {
+		return false, err
+	}
+	if cur != nil && cur.YAML == string(data) {
+		return false, nil
+	}
+	return true, ps.PutPolicy(ctx, &StoredPolicy{YAML: string(data), UpdatedAt: now.UTC()})
 }
 
 // Store keeps one State per key name, and the lock of all states.

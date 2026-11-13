@@ -168,6 +168,41 @@ func (s *StateStore) Heartbeats(ctx context.Context) (map[string]time.Time, erro
 	return out, nil
 }
 
+// policyName is the object with the copy of policy.yaml. ListStates skips names that start with ".".
+const policyName = ".policy"
+
+// PutPolicy writes the copy of policy.yaml. apply calls it under the state lock.
+func (s *StateStore) PutPolicy(ctx context.Context, p *state.StoredPolicy) error {
+	b, err := json.Marshal(p)
+	if err != nil {
+		return err
+	}
+	_, err = s.API.PutObject(ctx, &s3.PutObjectInput{Bucket: &s.Bucket, Key: aws.String(s.key(policyName)),
+		Body: bytes.NewReader(b), ContentType: aws.String("application/json")})
+	if err != nil {
+		return fmt.Errorf("s3 put %s: %w", s.key(policyName), err)
+	}
+	return nil
+}
+
+// GetPolicy returns the copy of policy.yaml, or nil when there is none.
+func (s *StateStore) GetPolicy(ctx context.Context) (*state.StoredPolicy, error) {
+	out, err := s.API.GetObject(ctx, &s3.GetObjectInput{Bucket: &s.Bucket, Key: aws.String(s.key(policyName))})
+	var nsk *types.NoSuchKey
+	if errors.As(err, &nsk) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("s3 get %s: %w", s.key(policyName), err)
+	}
+	defer func() { _ = out.Body.Close() }()
+	var p state.StoredPolicy
+	if err := json.NewDecoder(out.Body).Decode(&p); err != nil {
+		return nil, fmt.Errorf("s3 %s: %w", s.key(policyName), err)
+	}
+	return &p, nil
+}
+
 func (s *StateStore) readHeartbeats(ctx context.Context) (map[string]string, error) {
 	out, err := s.API.GetObject(ctx, &s3.GetObjectInput{Bucket: &s.Bucket, Key: aws.String(s.key(heartbeatName))})
 	var nsk *types.NoSuchKey

@@ -152,27 +152,76 @@ func TestProviderFromSecrets(t *testing.T) {
 
 func TestResolveExporterConfig(t *testing.T) {
 	dir := t.TempDir()
-	pol := filepath.Join(dir, "policy.yaml")
-	_ = os.WriteFile(pol, []byte("state: s3://b/st\nsecrets: aws\nproviders:\n  openrouter:\n    management_key: or/key\n"), 0o644)
+	path := filepath.Join(dir, "policy.yaml")
+	load := func(body string) *manifest.Policy {
+		t.Helper()
+		_ = os.WriteFile(path, []byte(body), 0o644)
+		pol, err := manifest.LoadPolicy(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return pol
+	}
+	pol := load("state: s3://b/st\nsecrets: aws\nproviders:\n  openrouter:\n    management_key: or/key\n")
 
 	c, err := resolveExporterConfig(pol, "vault://secret/x", "vault", nil, false, false)
-	if err != nil || c.State != "s3://b/st" || c.Secrets != "aws" || c.Providers["openrouter"].ManagementKey != "or/key" {
+	if err != nil || c.State != "s3://b/st" || c.Secrets != "aws" || c.Providers["openrouter"].ManagementKey != "or/key" || c.Policy != pol {
 		t.Fatalf("from policy: %+v %v", c, err)
 	}
 	c, err = resolveExporterConfig(pol, "vault://secret/x", "vault", []string{"openrouter=other/key", "deepinfra=di/key"}, true, false)
 	if err != nil || c.State != "vault://secret/x" || c.Secrets != "aws" || c.Providers["openrouter"].ManagementKey != "other/key" || len(c.Providers) != 2 {
 		t.Fatalf("flags override: %+v %v", c, err)
 	}
-	_ = os.WriteFile(pol, []byte("providers:\n  - {name: or-a, kind: openrouter, management_key: a/key}\n"), 0o644)
+	pol = load("providers:\n  - {name: or-a, kind: openrouter, management_key: a/key}\n")
 	c, err = resolveExporterConfig(pol, "s", "vault", []string{"or-a=b/key"}, true, true)
 	if err != nil || c.Providers["or-a"].Kind != "openrouter" || c.Providers["or-a"].ManagementKey != "b/key" {
 		t.Fatalf("flag keeps the policy kind: %+v %v", c, err)
 	}
-	if _, err := resolveExporterConfig("", "s", "vault", nil, false, false); err == nil {
+	if _, err := resolveExporterConfig(nil, "s", "vault", nil, false, false); err == nil {
 		t.Fatal("no providers must fail")
 	}
-	if _, err := resolveExporterConfig("", "s", "vault", []string{"broken"}, false, false); err == nil {
+	if _, err := resolveExporterConfig(nil, "s", "vault", []string{"broken"}, false, false); err == nil {
 		t.Fatal("bad --provider must fail")
+	}
+}
+
+type policyStore struct {
+	lockStore
+	p      *state.StoredPolicy
+	writes int
+}
+
+func (s *policyStore) PutPolicy(_ context.Context, p *state.StoredPolicy) error {
+	s.p = p
+	s.writes++
+	return nil
+}
+
+func (s *policyStore) GetPolicy(context.Context) (*state.StoredPolicy, error) { return s.p, nil }
+
+func TestSavePolicy(t *testing.T) {
+	dir := t.TempDir()
+	body := "state: vault://kv/orkeys/state\nproviders:\n  openrouter:\n    management_key: or/key\n    future_field: x\n"
+	_ = os.WriteFile(filepath.Join(dir, "policy.yaml"), []byte(body), 0o644)
+	a := &app{repo: dir, output: "json"}
+	ctx := context.Background()
+	ps := &policyStore{}
+	if err := a.savePolicy(ctx, ps); err != nil || ps.p == nil || ps.p.YAML != body {
+		t.Fatalf("save: %+v %v", ps.p, err)
+	}
+	if err := a.savePolicy(ctx, ps); err != nil || ps.writes != 1 {
+		t.Fatalf("unchanged policy written again: %d writes, %v", ps.writes, err)
+	}
+
+	pol, err := storedPolicy(ctx, ps)
+	if err != nil || pol.State != "vault://kv/orkeys/state" || pol.Providers["openrouter"].ManagementKey != "or/key" {
+		t.Fatalf("stored policy with an unknown field: %+v %v", pol, err)
+	}
+	if pol, err := storedPolicy(ctx, &policyStore{}); pol != nil || err != nil {
+		t.Fatalf("no copy must be nil, nil: %v %v", pol, err)
+	}
+	if err := a.savePolicy(ctx, &lockStore{}); err != nil {
+		t.Fatalf("a store without policies must be skipped: %v", err)
 	}
 }
 

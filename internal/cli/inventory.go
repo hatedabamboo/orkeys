@@ -190,13 +190,16 @@ func (a *app) applyCmd() *cobra.Command {
 				if a.output != "json" {
 					writePlan(os.Stdout, plan)
 				}
-				if plan.Empty() {
-					return nil
+				if !plan.Empty() {
+					if !yes && !confirm("Apply these changes?") {
+						return errors.New("aborted")
+					}
+					if err := e.Apply(ctx, plan, opt); err != nil {
+						return err
+					}
 				}
-				if !yes && !confirm("Apply these changes?") {
-					return errors.New("aborted")
-				}
-				return e.Apply(ctx, plan, opt)
+				// A change of only the policy gives an empty plan. The exporter still needs the new copy.
+				return a.savePolicy(ctx, e.State)
 			})
 			return a.finish(map[string]any{"plan": plan}, err)
 		},
@@ -205,6 +208,26 @@ func (a *app) applyCmd() *cobra.Command {
 	cmd.Flags().IntVar(&opt.AllowDeletes, "allow-deletes", 0, "allow this run to revoke up to this many keys (above policy max_deletes)")
 	cmd.Flags().StringVar(&planFile, "plan", "", "apply only if the plan is the same as this file from plan --out")
 	return cmd
+}
+
+// savePolicy writes policy.yaml of the inventory to the state store if it changed. The exporter reads this copy.
+func (a *app) savePolicy(ctx context.Context, store state.Store) error {
+	ps, ok := store.(state.Policies)
+	if !ok {
+		return nil
+	}
+	data, err := os.ReadFile(filepath.Join(a.repo, "policy.yaml"))
+	if err != nil {
+		return fmt.Errorf("save policy to the state store: %w", err)
+	}
+	wrote, err := state.SavePolicy(ctx, ps, data, time.Now())
+	if err != nil {
+		return fmt.Errorf("save policy to the state store: %w", err)
+	}
+	if wrote && a.output != "json" {
+		fmt.Println("policy.yaml saved to the state store")
+	}
+	return nil
 }
 
 func (a *app) rotateCmd() *cobra.Command {

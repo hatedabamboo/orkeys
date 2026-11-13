@@ -123,6 +123,7 @@ func (e *Engine) stateFor(k *manifest.Key) *state.State {
 		LimitUSD:   k.Budget.Limit,
 		LimitReset: k.Budget.ResetOrDefault(),
 		TrackOnly:  k.TrackOnly(),
+		Disabled:   k.Disabled,
 	}
 	for _, sec := range k.SecretTargets() {
 		st.Secrets = append(st.Secrets, state.SecretRef{Path: sec.Path, Field: sec.Field})
@@ -138,6 +139,7 @@ func copyMeta(dst, src *state.State) {
 	dst.Team, dst.Env, dst.Service = src.Team, src.Env, src.Service
 	dst.LimitUSD, dst.LimitReset = src.LimitUSD, src.LimitReset
 	dst.NotifyChannel, dst.AlertChannel = src.NotifyChannel, src.AlertChannel
+	dst.Disabled = src.Disabled
 }
 
 // cleanupTimeout bounds one compensating action or state write after the run context is cancelled.

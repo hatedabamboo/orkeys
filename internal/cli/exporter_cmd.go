@@ -17,25 +17,21 @@ import (
 	"github.com/hatedabamboo/orkeys/internal/manifest"
 	"github.com/hatedabamboo/orkeys/internal/provider"
 	"github.com/hatedabamboo/orkeys/internal/secrets"
+	"github.com/hatedabamboo/orkeys/internal/state"
 )
 
 type exporterConfig struct {
 	State     string
 	Secrets   string
 	Providers map[string]manifest.ProviderConfig
-	// Policy is nil without --policy.
+	// Policy is from --policy or from the state store. It is nil when neither has one.
 	Policy *manifest.Policy
 }
 
-// resolveExporterConfig starts from policy.yaml (when given) and lets explicit flags override it.
-func resolveExporterConfig(policyPath, stateURL, secretsKind string, providerPaths []string, stateSet, secretsSet bool) (*exporterConfig, error) {
-	c := &exporterConfig{State: stateURL, Secrets: secretsKind, Providers: map[string]manifest.ProviderConfig{}}
-	if policyPath != "" {
-		pol, err := manifest.LoadPolicy(policyPath)
-		if err != nil {
-			return nil, err
-		}
-		c.Policy = pol
+// resolveExporterConfig starts from the policy (when given) and lets explicit flags override it.
+func resolveExporterConfig(pol *manifest.Policy, stateURL, secretsKind string, providerPaths []string, stateSet, secretsSet bool) (*exporterConfig, error) {
+	c := &exporterConfig{State: stateURL, Secrets: secretsKind, Providers: map[string]manifest.ProviderConfig{}, Policy: pol}
+	if pol != nil {
 		if !stateSet {
 			c.State = pol.State
 		}
@@ -56,9 +52,30 @@ func resolveExporterConfig(policyPath, stateURL, secretsKind string, providerPat
 		c.Providers[name] = pc
 	}
 	if len(c.Providers) == 0 {
-		return nil, errors.New("no providers: pass --policy or at least one --provider name=secret-path")
+		return nil, errors.New("no providers: pass --policy or --provider name=secret-path, or run apply to save policy.yaml to the state store")
 	}
 	return c, nil
+}
+
+// storedPolicy returns the copy of policy.yaml that apply saved in the state store, or nil when there is none.
+func storedPolicy(ctx context.Context, st state.Store) (*manifest.Policy, error) {
+	ps, ok := st.(state.Policies)
+	if !ok {
+		return nil, nil
+	}
+	sp, err := ps.GetPolicy(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("read policy from the state store: %w", err)
+	}
+	if sp == nil {
+		fmt.Fprintln(os.Stderr, "orkeys: no policy.yaml in the state store; run apply to save it")
+		return nil, nil
+	}
+	pol, err := manifest.ParsePolicy([]byte(sp.YAML))
+	if err != nil {
+		return nil, fmt.Errorf("policy in the state store: %w", err)
+	}
+	return pol, nil
 }
 
 func (a *app) exporterCmd() *cobra.Command {
@@ -70,7 +87,9 @@ func (a *app) exporterCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "exporter",
 		Short: "Serve key spend, limits and expiry as Prometheus metrics",
-		Example: `  orkeys exporter --policy /etc/orkeys/policy.yaml
+		Example: `  orkeys exporter --state vault://secret/orkeys/state --secrets vault
+
+  orkeys exporter --policy /etc/orkeys/policy.yaml
 
   orkeys exporter --state vault://secret/orkeys/state --secrets vault \
     --provider openrouter=secret/orkeys/providers/openrouter \
@@ -82,14 +101,32 @@ func (a *app) exporterCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx := cmd.Context()
 			flags := cmd.Flags()
-			cfg, err := resolveExporterConfig(policyPath, stateURL, secretsKind, providerPaths, flags.Changed("state"), flags.Changed("secrets"))
+			var (
+				f   backend.Factory
+				pol *manifest.Policy
+				st  state.Store
+				err error
+			)
+			fromStore := policyPath == ""
+			if fromStore {
+				if st, err = f.State(ctx, stateURL); err != nil {
+					return err
+				}
+				if pol, err = storedPolicy(ctx, st); err != nil {
+					return err
+				}
+			} else if pol, err = manifest.LoadPolicy(policyPath); err != nil {
+				return err
+			}
+			// The stored policy cannot move the state: the exporter found the policy at --state.
+			cfg, err := resolveExporterConfig(pol, stateURL, secretsKind, providerPaths, fromStore || flags.Changed("state"), flags.Changed("secrets"))
 			if err != nil {
 				return err
 			}
-			var f backend.Factory
-			st, err := f.State(ctx, cfg.State)
-			if err != nil {
-				return err
+			if st == nil {
+				if st, err = f.State(ctx, cfg.State); err != nil {
+					return err
+				}
 			}
 			var sec secrets.Store
 			providers := provider.Set{}
@@ -110,7 +147,7 @@ func (a *app) exporterCmd() *cobra.Command {
 				}
 				providers[name] = p
 			}
-			x := &exporter.Exporter{Store: st, Providers: providers, Policy: cfg.Policy, Interval: interval}
+			x := &exporter.Exporter{Store: st, Providers: providers, Policy: cfg.Policy, PolicyFromStore: fromStore, Version: a.version, Interval: interval}
 			go x.Run(ctx)
 			srv := &http.Server{Addr: listen, Handler: x, ReadHeaderTimeout: 10 * time.Second}
 			go func() {
@@ -129,7 +166,7 @@ func (a *app) exporterCmd() *cobra.Command {
 	f := cmd.Flags()
 	f.StringVar(&listen, "listen", ":9090", "listen address")
 	f.DurationVar(&interval, "interval", 10*time.Minute, "provider poll interval")
-	f.StringVar(&policyPath, "policy", "", "read state, secrets and providers from this policy.yaml; flags override it")
+	f.StringVar(&policyPath, "policy", "", "read state, secrets and providers from this policy.yaml; flags override it. Default: the copy of policy.yaml that apply saves in --state")
 	f.StringVar(&stateURL, "state", "vault://secret/orkeys/state", "state store: vault://<mount>/<path> or s3://<bucket>/<prefix>")
 	f.StringVar(&secretsKind, "secrets", "vault", "where management keys are: vault or aws (Secrets Manager)")
 	f.StringArrayVar(&providerPaths, "provider", nil, "provider and secret path of its management key, name=path (repeat); with --policy, the name can be any provider name of the policy")
