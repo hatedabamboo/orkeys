@@ -1,5 +1,18 @@
 # CHANGELOG
 
+## v0.4.1 (2026-11-13)
+
+- (change) `orkeys_unmanaged_keys` no longer counts disabled keys when `track_disabled` is `false` (the default), the
+  same as `plan`. To count them, set `ignore_disabled: false` in the provider `options` [0f038c0](https://github.com/hatedabamboo/orkeys/commit/0f038c00297cd0234d73ed39435bde17fc2cd14b)
+- (feat) `track_only: true` on a key manifest or in `providers[].options`: `apply` saves only the state of the `import`
+  key, and the exporter exports its metrics. orkeys does not set its limit, write it to secrets, sync consumers,
+  rotate, disable or revoke it. Deleting the manifest removes only the state. `orkeys request` refuses a provider with
+  `track_only: true` [8e3ec8a](https://github.com/hatedabamboo/orkeys/commit/8e3ec8a63880d5ba92b01c43e89c7f5bffc523e6) [0f038c0](https://github.com/hatedabamboo/orkeys/commit/0f038c00297cd0234d73ed39435bde17fc2cd14b)
+- (feat) `orkeys import --track-only` prints manifests with `track_only: true` and no `secret` [8e3ec8a](https://github.com/hatedabamboo/orkeys/commit/8e3ec8a63880d5ba92b01c43e89c7f5bffc523e6)
+- (feat) Provider options `report_unmanaged`, `ignore_disabled` and `ignore_unmanaged` (key IDs) set which keys
+  without state `plan`, `orkeys import` and the exporter report. `plan` warns about an ignored ID that is missing or
+  managed [0f038c0](https://github.com/hatedabamboo/orkeys/commit/0f038c00297cd0234d73ed39435bde17fc2cd14b)
+
 ## v0.4.0 (2026-11-11)
 
 - (change) Breaking: upgrade all runners (CI and laptops) together. Each state now has `schema: 2`, and orkeys refuses
