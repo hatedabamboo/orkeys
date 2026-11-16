@@ -19,7 +19,7 @@ import (
 )
 
 // Secrets writes GitHub Actions secrets: repository, environment and organization secrets.
-// The token needs "Secrets: read and write" on the repositories (fine-grained token or GitHub App),
+// It also starts workflow runs (Dispatch). The token needs "Secrets: read and write" on the repositories (fine-grained token or GitHub App),
 // and organization admin for organization secrets.
 type Secrets struct {
 	Token string
@@ -78,14 +78,18 @@ func base(t manifest.GitHubSecret) string {
 }
 
 func httpErr(op string, t manifest.GitHubSecret, code int, body []byte) error {
+	return fmt.Errorf("github %s %s: %w", op, t, apiErr(code, body))
+}
+
+func apiErr(code int, body []byte) error {
 	var m struct {
 		Message string `json:"message"`
 	}
 	_ = json.Unmarshal(body, &m)
 	if m.Message != "" {
-		return fmt.Errorf("github %s %s: HTTP %d: %s", op, t, code, m.Message)
+		return fmt.Errorf("HTTP %d: %s", code, m.Message)
 	}
-	return fmt.Errorf("github %s %s: HTTP %d", op, t, code)
+	return fmt.Errorf("HTTP %d", code)
 }
 
 // Put encrypts value with the public key of the target and writes the secret.

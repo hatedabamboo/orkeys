@@ -39,6 +39,11 @@ type GitHubSecrets interface {
 	Delete(ctx context.Context, t manifest.GitHubSecret) error
 }
 
+// GitHubWorkflows starts GitHub Actions workflow runs.
+type GitHubWorkflows interface {
+	Dispatch(ctx context.Context, w manifest.GitHubWorkflow) error
+}
+
 // KubeNotifier is the driver of the eso and direct consumers. For eso it forces a sync of the ExternalSecret
 // first. Then it restarts the workloads.
 type KubeNotifier struct{ Kube Kube }
@@ -65,15 +70,36 @@ func (n KubeNotifier) Notify(ctx context.Context, spec manifest.NotifySpec) erro
 }
 
 // GitHubPusher is the driver of the github consumer.
-type GitHubPusher struct{ Secrets GitHubSecrets }
+type GitHubPusher struct {
+	Secrets   GitHubSecrets
+	Workflows GitHubWorkflows
+}
 
-// Push writes value to the GitHub secret of spec.
+// Push writes value to the GitHub secret of spec. Then it starts each workflow of spec.
+// A failed start fails the push. So the next apply or rotate --retry writes the secret again and starts all
+// workflows again. A failed start does not stop the other starts.
 func (g GitHubPusher) Push(ctx context.Context, spec manifest.PushSpec, value string) error {
 	c, ok := spec.(*manifest.GitHubConsumer)
 	if !ok {
 		return fmt.Errorf("github: no support for consumer %T", spec)
 	}
-	return g.Secrets.Put(ctx, c.Target(), value)
+	if err := g.Secrets.Put(ctx, c.Target(), value); err != nil {
+		return err
+	}
+	runs := c.Runs()
+	if len(runs) == 0 {
+		return nil
+	}
+	if g.Workflows == nil {
+		return fmt.Errorf("github secret %s written; workflows not started: no workflow driver configured", c.Target())
+	}
+	var errs []error
+	for _, w := range runs {
+		if err := g.Workflows.Dispatch(ctx, w); err != nil {
+			errs = append(errs, fmt.Errorf("github secret %s written; workflow not started: %w", c.Target(), err))
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // Remove deletes the GitHub secret with this ID.

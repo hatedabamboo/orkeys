@@ -245,6 +245,97 @@ secret: {path: kv/llm/c}
 consumers:
   - {type: github, repo: a/b, name: X, cluster: c}
 `, "consumer type github has no field cluster"},
+		"github workflow with org": {"teams/chat-core/prod-chat-core-c.yaml", `
+name: prod-chat-core-c
+kind: production
+provider: openrouter
+env: prod
+service: c
+description: d
+budget: {limit: 10}
+ttl: 30d
+secret: {path: kv/llm/c}
+consumers:
+  - {type: github, org: a, name: X, workflows: [{workflow: deploy.yml}]}
+`, "workflows: only with repo"},
+		"github workflow path": {"teams/chat-core/prod-chat-core-c.yaml", `
+name: prod-chat-core-c
+kind: production
+provider: openrouter
+env: prod
+service: c
+description: d
+budget: {limit: 10}
+ttl: 30d
+secret: {path: kv/llm/c}
+consumers:
+  - {type: github, repo: a/b, name: X, workflows: [{workflow: .github/workflows/deploy.yml}]}
+`, "is not a workflow file name"},
+		"github workflow without name": {"teams/chat-core/prod-chat-core-c.yaml", `
+name: prod-chat-core-c
+kind: production
+provider: openrouter
+env: prod
+service: c
+description: d
+budget: {limit: 10}
+ttl: 30d
+secret: {path: kv/llm/c}
+consumers:
+  - {type: github, repo: a/b, name: X, workflows: [{ref: main}]}
+`, "workflows[0].workflow: required"},
+		"github bad ref": {"teams/chat-core/prod-chat-core-c.yaml", `
+name: prod-chat-core-c
+kind: production
+provider: openrouter
+env: prod
+service: c
+description: d
+budget: {limit: 10}
+ttl: 30d
+secret: {path: kv/llm/c}
+consumers:
+  - {type: github, repo: a/b, name: X, workflows: [{workflow: deploy.yml, ref: "a b"}]}
+`, "is not a branch or tag name"},
+		"github workflow unknown field": {"teams/chat-core/prod-chat-core-c.yaml", `
+name: prod-chat-core-c
+kind: production
+provider: openrouter
+env: prod
+service: c
+description: d
+budget: {limit: 10}
+ttl: 30d
+secret: {path: kv/llm/c}
+consumers:
+  - {type: github, repo: a/b, name: X, workflows: [{workflow: deploy.yml, branch: main}]}
+`, "workflows has no field branch"},
+		"github workflow twice": {"teams/chat-core/prod-chat-core-c.yaml", `
+name: prod-chat-core-c
+kind: production
+provider: openrouter
+env: prod
+service: c
+description: d
+budget: {limit: 10}
+ttl: 30d
+secret: {path: kv/llm/c}
+consumers:
+  - {type: github, repo: a/b, name: X, workflows: [{workflow: deploy.yml}, {workflow: deploy.yml}]}
+`, "workflows[1]: same workflow and ref as workflows[0]"},
+		"github workflows not a list of maps": {"teams/chat-core/prod-chat-core-c.yaml", `
+name: prod-chat-core-c
+kind: production
+provider: openrouter
+env: prod
+service: c
+description: d
+budget: {limit: 10}
+ttl: 30d
+secret: {path: kv/llm/c}
+consumers:
+  - {type: github, repo: a/b, name: X, workflows: [deploy.yml]}
+`, "workflows: want a mapping"},
 		"eso with repo": {"teams/chat-core/prod-chat-core-c.yaml", `
 name: prod-chat-core-c
 kind: production

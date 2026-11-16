@@ -441,7 +441,7 @@ service (Alertmanager, a CI step, a bot) can route them.
 | `budget.reset` | no | Limit period: `daily`, `weekly`, `monthly` (DeepInfra: monthly only). Default: the kind `budget.reset` |
 | `ttl` | no | `90d`, `2w`, `24h`. Default and maximum: the kind `ttl`. OpenAI: at most `365d` |
 | `secret.path`, `secret.field` | path: yes, except with `track_only: true` | Where the key goes. Vault: `<mount>/<path>`; AWS: secret name. Field default `api_key`. Other fields in the same secret are kept. `secret` is one mapping or a list of mappings: orkeys writes the same key to each place. Two keys can share a path, not a path and field |
-| `consumers[]` | no | `type` (`eso`, `direct` or `github`). For `eso` and `direct`: `cluster`, `namespace`, `externalsecret` (eso), `restart` (`deployment/x`, `statefulset/x`, `daemonset/x`, `cronjob/x`). orkeys restarts only what `restart` lists. For `github`: `repo` (`owner/repo`) or `org`, `environment` (repo only), `name`, `visibility` (org only: `private` (default) or `all`). See [GitHub Actions secrets](#github-actions-secrets). A field of another type is an error |
+| `consumers[]` | no | `type` (`eso`, `direct` or `github`). For `eso` and `direct`: `cluster`, `namespace`, `externalsecret` (eso), `restart` (`deployment/x`, `statefulset/x`, `daemonset/x`, `cronjob/x`). orkeys restarts only what `restart` lists. For `github`: `repo` (`owner/repo`) or `org`, `environment` (repo only), `name`, `visibility` (org only: `private` (default) or `all`), `workflows` (repo only: a list of `{workflow, ref, inputs}` to run after each write). See [GitHub Actions secrets](#github-actions-secrets). A field of another type is an error |
 | `import.id`, `import.name` | no | Adopt an existing provider key instead of creating one. `name` is its current name at the provider. See below |
 | `disabled` | no | `true` disables the key at the provider and stops its rotation. Default `false`. Not for OpenAI keys. See below |
 | `track_only` | no | `true`: orkeys saves the state of the `import` key and exports its metrics, and does not change the key. Default: the provider option `track_only`. `false` on a key of a provider with `track_only: true` makes a managed key. See [Tracking a key](#tracking-a-key) |
@@ -482,6 +482,8 @@ A `github` consumer is a GitHub Actions secret. orkeys writes the key to it:
 - `rotate` writes the new key during the consumer sync. If a write fails, the rotation fails and the old key stays
   active. Fix the cause, then run `orkeys rotate --retry <key>`.
 - When you delete the manifest, `apply` deletes the GitHub secrets first, then revokes the key.
+- With `workflows`, orkeys starts a `workflow_dispatch` run of each listed workflow in `repo` after each write of
+  the secret. See [Workflow runs](#workflow-runs).
 
 ```yaml
 secret:                             # one key in two places; each rotation updates both
@@ -513,6 +515,40 @@ If a consumer still uses the old key after `revoke_grace`, its spend grows and o
 Add, remove or change a place in `secret` to move a key: orkeys rotates it, writes the new key to all places in the
 list, and removes the fields of removed places after the revoke. Delete the manifest to revoke the key; orkeys removes
 only its own fields from the secrets.
+
+##### Workflow runs
+
+Limits:
+
+- `workflows` is for `repo` consumers only. Organization secrets have no repository to run a workflow in.
+- The workflow must have a `workflow_dispatch` trigger. GitHub rejects `inputs` that the trigger does not declare.
+- orkeys starts the run and does not wait for it. A failed run does not fail the rotation. Watch the run in GitHub.
+- orkeys does not start runs when you add `workflows` to a consumer that already holds the current key. The first
+  runs come with the next write: a rotation, or a change of `secret`.
+- If one start fails, the retry starts all workflows of the consumer again, also the ones that started.
+- Two `github` consumers with the same workflow start two runs. One consumer cannot list the same `workflow` and
+  `ref` twice.
+
+Use `workflows` when a deploy workflow reads the secret and the service gets the key only from a deploy. After each
+write of the secret (create, import, rotation, reissue), orkeys starts a run of each workflow in the list:
+
+```yaml
+consumers:
+  - type: github
+    repo: acme/search
+    name: OPENROUTER_API_KEY
+    workflows:
+      - workflow: deploy.yml            # file in .github/workflows, or a workflow ID
+        ref: main                       # branch or tag to run on; default: the default branch
+        inputs: {environment: prod}     # workflow_dispatch inputs; optional
+      - workflow: smoke-test.yml        # runs on the default branch with no inputs
+```
+
+If a start fails, the write counts as failed. At `rotate`, the rotation fails and the old key stays active. Fix the
+cause, then run `orkeys rotate --retry <key>`: orkeys writes the secret again and starts the workflows again. At
+`apply`, the next `plan` shows `sync-consumers`.
+
+The token needs "Actions: read and write" on the repository, in addition to "Secrets: read and write".
 
 #### Disabling a key
 
@@ -784,7 +820,7 @@ needs read access to the state only.
 | `AWS_REGION`, `AWS_PROFILE`, ... | S3 and Secrets Manager | Standard AWS SDK credential chain: env vars, profile, web identity (GitHub OIDC), pod role |
 | `ORKEYS_<PROVIDER>_KEY`, `ORKEYS_<PROVIDER>_SELF_ID` | all except validate | Management key and its ID; override `management_key` |
 | `GITHUB_TOKEN` | request, hygiene, plan | Team members from GitHub teams and org membership checks (`read:org`). Without it, `request` fails for a GitHub team, `hygiene` skips owner checks, `plan` skips team checks |
-| `ORKEYS_GITHUB_SECRETS_TOKEN` | apply, rotate | Writes GitHub Actions secrets for `github` consumers. Default: `GITHUB_TOKEN` |
+| `ORKEYS_GITHUB_SECRETS_TOKEN` | apply, rotate | Writes GitHub Actions secrets for `github` consumers and starts their `workflows`. Default: `GITHUB_TOKEN` |
 
 AWS permissions: `s3:GetObject`, `s3:PutObject`, `s3:DeleteObject` on `<bucket>/<prefix>/*` and `s3:ListBucket` on the
 bucket; `secretsmanager:GetSecretValue`, `DescribeSecret`, `CreateSecret`, `PutSecretValue`, `TagResource`, `UntagResource`,
@@ -827,7 +863,7 @@ races with a takeover of an expired lock can remove the new holder's lock.
    consumer with no `restart` is not restarted: use this for workloads that reload the secret by themselves (a mounted
    secret volume, or an app that reads Vault on each request). `direct` consumers (workloads that read the secrets
    store themselves) get no force-sync, only their `restart` targets. CronJobs are not restarted; the next run reads
-   the new secret. `github` consumers get the new key written to their GitHub Actions secrets.
+   the new secret. `github` consumers get the new key written to their GitHub Actions secrets, and orkeys starts their `workflows`.
 3. 15 minutes after the switch, a `rotate` run records the old key's usage (total usage on OpenRouter, spend this
    month on DeepInfra and OpenAI). OpenAI reports spend with a delay, so use a `revoke_grace` of at least 24h for
    OpenAI keys. After `revoke_grace` (24h), `rotate` compares it again. If the usage grew, a consumer still has

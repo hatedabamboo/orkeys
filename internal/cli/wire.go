@@ -207,7 +207,8 @@ func (a *app) engine(ctx context.Context, outDir string) (*engine.Engine, error)
 		e.Org = &github.Org{Name: inv.Policy.GitHub.Org, Token: tok, API: inv.Policy.GitHub.APIURL}
 	}
 	if tok := cmp.Or(os.Getenv(EnvGitHubSecretsToken), os.Getenv(EnvGitHubToken)); tok != "" {
-		e.Pushers[manifest.ConsumerGitHub] = engine.GitHubPusher{Secrets: &github.Secrets{Token: tok, API: inv.Policy.GitHub.APIURL}}
+		gh := &github.Secrets{Token: tok, API: inv.Policy.GitHub.APIURL}
+		e.Pushers[manifest.ConsumerGitHub] = engine.GitHubPusher{Secrets: gh, Workflows: gh}
 	}
 	return e, nil
 }

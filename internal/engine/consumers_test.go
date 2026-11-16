@@ -108,6 +108,60 @@ func TestGitHubConsumers(t *testing.T) {
 	}
 }
 
+func TestGitHubConsumerWorkflow(t *testing.T) {
+	v := setup(t)
+	gh := &fakeGitHub{}
+	v.e.Pushers = map[string]Pusher{manifest.ConsumerGitHub: GitHubPusher{Secrets: gh, Workflows: gh}}
+	v.edit(t, prodFile, "restart: [deployment/dialog]\n", `restart: [deployment/dialog]
+  - type: github
+    repo: acme/dialog
+    name: OPENROUTER_API_KEY
+    workflows:
+      - {workflow: deploy.yml, ref: main, inputs: {env: prod}}
+      - workflow: smoke.yaml
+  - {type: github, repo: acme/dialog, environment: prod, name: OPENROUTER_API_KEY}
+`)
+
+	// Create writes the secrets and starts the workflow once.
+	v.apply(t)
+	if want := []string{"acme/dialog/deploy.yml@main", "acme/dialog/smoke.yaml@"}; !slices.Equal(gh.runs, want) {
+		t.Fatalf("runs after create: %v", gh.runs)
+	}
+
+	// A failed start fails the rotation. The secret already holds the new key.
+	gh.failRuns = errors.New("HTTP 422: Workflow does not have 'workflow_dispatch' trigger")
+	v.clk.add(days(85))
+	_ = v.rotate(t, RotateOptions{})
+	st := v.store.states[prodKey]
+	if st.Rotation != state.RotationFailed || !strings.Contains(st.RotationError, "workflow not started") {
+		t.Fatalf("want failed rotation: %+v", st)
+	}
+	if gh.secrets[ghRepo] != v.store.secrets[prodSecret] {
+		t.Fatal("secret not written before the workflow start")
+	}
+
+	// The retry writes the secret again and starts the workflow.
+	gh.failRuns = nil
+	if err := v.rotate(t, RotateOptions{Retry: []string{prodKey}}); err != nil {
+		t.Fatal(err)
+	}
+	if len(gh.runs) != 4 {
+		t.Fatalf("runs after retry: %v", gh.runs)
+	}
+	if st := v.store.states[prodKey]; st.Rotation != state.RotationIdle {
+		t.Fatalf("rotation after retry: %+v", st)
+	}
+}
+
+func TestGitHubConsumerWorkflowWithoutDriver(t *testing.T) {
+	v := setup(t)
+	v.e.Pushers = map[string]Pusher{manifest.ConsumerGitHub: GitHubPusher{Secrets: &fakeGitHub{}}}
+	v.edit(t, prodFile, "restart: [deployment/dialog]\n", "restart: [deployment/dialog]\n  - {type: github, repo: acme/dialog, name: X, workflows: [{workflow: deploy.yml}]}\n")
+	if err := v.e.Apply(t.Context(), v.plan(t), ApplyOptions{}); err == nil || !strings.Contains(err.Error(), "no workflow driver configured") {
+		t.Fatalf("want a missing driver error, got %v", err)
+	}
+}
+
 func TestGitHubConsumerWithoutToken(t *testing.T) {
 	v := setup(t)
 	v.e.Pushers = map[string]Pusher{manifest.ConsumerGitHub: Unavailable{Reason: "github consumers: no GitHub token"}}
