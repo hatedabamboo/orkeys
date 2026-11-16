@@ -23,7 +23,7 @@ orkeys manages LLM provider API keys (OpenRouter, DeepInfra, OpenAI). It has two
 | Path | Contents |
 |---|---|
 | `main.go` | Entry point. Sets `main.version` from ldflags |
-| `internal/cli` | Cobra commands: `openrouter.go`, `deepinfra.go`, `openai.go`, `keys.go` (any provider), `inventory.go`, `exporter_cmd.go`. Wiring in `wire.go`, output in `render.go` and `output.go`, event webhook in `webhook.go` |
+| `internal/cli` | Cobra commands: `openrouter.go`, `deepinfra.go`, `openai.go`, `keys.go` (any provider), `inventory.go`, `exporter_cmd.go`. Wiring in `wire.go`, output in `render.go` and `output.go`, event webhook in `webhook.go`, log setup in `logging.go` |
 | `internal/engine` | Inventory logic: `plan.go`, `apply.go`, `rotate.go`, `request.go`, `revoke.go`, `tracked.go`, `hygiene.go`, `import.go`, `teams.go`, `consumers.go` (consumer drivers), `recover.go` (interrupted issues, secret drift), `event.go`. Test fakes in `fakes_test.go` |
 | `internal/manifest` | Load and validate `policy.yaml`, `team.yaml` and key manifests. Types in `types.go`, consumer types in `consumer.go`. Test repo in `testdata/repo` |
 | `internal/provider` | Common provider interface, optional `Limiter` and `Disabler`, and registry; OpenRouter, DeepInfra and OpenAI adapters. Contract tests in `conformance_test.go` |

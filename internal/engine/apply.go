@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/hatedabamboo/orkeys/internal/manifest"
@@ -28,6 +29,7 @@ func (e *Engine) Apply(ctx context.Context, plan *Plan, opt ApplyOptions) error 
 	if n, limit := plan.Deletes(), max(e.Inv.Policy.DeleteLimit(), opt.AllowDeletes); n > limit {
 		return fmt.Errorf("plan revokes %d keys, more than the limit %d: check the plan, then run apply --allow-deletes %d", n, limit, n)
 	}
+	e.debug(ctx, "apply", "actions", len(plan.Actions), "deletes", plan.Deletes(), "fingerprint", plan.Fingerprint)
 	var errs []error
 	for i, a := range plan.Actions {
 		// The check runs between actions. An action that stops halfway leaves more to repair.
@@ -36,10 +38,13 @@ func (e *Engine) Apply(ctx context.Context, plan *Plan, opt ApplyOptions) error 
 			break
 		}
 		e.logf("%s %s: %s", a.Type, a.Name, a.Detail)
+		start := time.Now()
 		if err := e.applyOne(ctx, a); err != nil {
 			e.logf("  failed: %v", err)
 			errs = append(errs, fmt.Errorf("%s %s: %w", a.Type, a.Name, err))
 		}
+		e.debug(ctx, "action done", "action", a.Type, "key", a.Name, "index", i+1, "of", len(plan.Actions),
+			"duration", time.Since(start).Round(time.Millisecond))
 	}
 	return errors.Join(errs...)
 }
@@ -83,6 +88,7 @@ func (e *Engine) applyOne(ctx context.Context, a Action) error {
 			return err
 		}
 		limit := a.Key.Budget.Limit
+		e.debug(ctx, "set provider limit", "key", a.Name, "key_id", short(a.State.KeyID), "limit", limit, "reset", a.Key.Budget.ResetOrDefault())
 		if err := l.SetLimit(ctx, a.State.KeyID, &limit, a.Key.Budget.ResetOrDefault()); err != nil {
 			return err
 		}
@@ -132,6 +138,8 @@ func (e *Engine) remove(ctx context.Context, st *state.State, reason string) err
 	if st.TrackOnly {
 		return fmt.Errorf("%s: tracked key %s; orkeys does not revoke it", st.Name, short(st.KeyID))
 	}
+	e.debug(ctx, "remove key", "key", st.Name, "reason", reason, "key_ids", strings.Join(shortAll(st.KnownIDs()), ","),
+		"secrets", len(st.Secrets), "pushed", len(st.Pushed))
 	// The push targets go first. If their delete fails, no key is revoked yet. The next run tries again.
 	if len(st.Pushed) > 0 {
 		err := e.syncPush(ctx, nil, st)
@@ -152,6 +160,7 @@ func (e *Engine) remove(ctx context.Context, st *state.State, reason string) err
 		return errors.Join(errs...)
 	}
 	for _, r := range st.Secrets {
+		e.debug(ctx, "delete secret field", "key", st.Name, "secret", r.String())
 		if err := e.Secrets.DeleteField(ctx, r.Path, r.Field); err != nil {
 			return fmt.Errorf("remove secret %s: %w", r, err)
 		}
@@ -179,12 +188,14 @@ func (e *Engine) adopt(ctx context.Context, k *manifest.Key, cur *provider.Key) 
 		return err
 	}
 	src := k.SecretTargets()[0]
+	e.debug(ctx, "adopt key: read current value", "key", k.Name, "key_id", short(cur.ID), "path", src.Path, "field", src.Field)
 	value, err := secrets.ReadField(ctx, e.Secrets, src.Path, src.Field)
 	if err != nil {
 		return fmt.Errorf("write the current key to %s#%s first: %w", src.Path, src.Field, err)
 	}
 	if l, err := provider.AsLimiter(p); err == nil {
 		limit := k.Budget.Limit
+		e.debug(ctx, "set provider limit", "key", k.Name, "key_id", short(cur.ID), "limit", limit, "reset", k.Budget.ResetOrDefault())
 		if err := l.SetLimit(ctx, cur.ID, &limit, k.Budget.ResetOrDefault()); err != nil {
 			return fmt.Errorf("set limit: %w", err)
 		}

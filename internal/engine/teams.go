@@ -14,7 +14,9 @@ func (e *Engine) slugOf(t *manifest.Team) string { return t.GitHubSlug(e.Inv.Pol
 func (e *Engine) inTeam(ctx context.Context, t *manifest.Team, login string) (bool, error) {
 	slug := e.slugOf(t)
 	if slug == "" {
-		return t.HasMember(login), nil
+		ok := t.HasMember(login)
+		e.debug(ctx, "team membership", "team", t.Team, "user", login, "source", "team.yaml", "member", ok)
+		return ok, nil
 	}
 	if e.Org == nil {
 		return false, fmt.Errorf("team %s reads its members from GitHub team %s/%s: set GITHUB_TOKEN (read:org)",
@@ -24,6 +26,7 @@ func (e *Engine) inTeam(ctx context.Context, t *manifest.Team, login string) (bo
 	if err != nil {
 		return false, fmt.Errorf("team %s: %w", t.Team, err)
 	}
+	e.debug(ctx, "team membership", "team", t.Team, "user", login, "source", "github", "slug", slug, "member", ok)
 	return ok, nil
 }
 

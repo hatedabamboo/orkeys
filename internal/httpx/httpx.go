@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -80,8 +81,12 @@ func Do(ctx context.Context, c *http.Client, r Request) error {
 		if payload != nil {
 			req.Header.Set("Content-Type", "application/json")
 		}
+		start := time.Now()
 		resp, err := c.Do(req)
 		if err != nil {
+			// The error is not logged here. A *url.Error holds the full URL with the query.
+			slog.DebugContext(ctx, "http request failed", "method", r.Method, "url", redact(r.URL), "attempt", i+1,
+				"duration", time.Since(start).Round(time.Millisecond))
 			return fmt.Errorf("%s %s: %w", r.Method, redact(r.URL), err)
 		}
 		data, err := io.ReadAll(io.LimitReader(resp.Body, 16<<20))
@@ -89,13 +94,18 @@ func Do(ctx context.Context, c *http.Client, r Request) error {
 		if err != nil {
 			return fmt.Errorf("read response: %w", err)
 		}
+		// Bodies are not logged. They can hold key values.
+		slog.DebugContext(ctx, "http request", "method", r.Method, "url", redact(r.URL), "status", resp.StatusCode,
+			"attempt", i+1, "duration", time.Since(start).Round(time.Millisecond), "bytes", len(data))
 		if resp.StatusCode >= 400 {
 			lastErr = &Error{Status: resp.StatusCode, Body: string(data)}
 			if r.ParseError != nil {
 				lastErr = r.ParseError(resp.StatusCode, data)
 			}
 			if (resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500) && i < attempts-1 {
-				if err := sleep(ctx, retryDelay(resp, i)); err != nil {
+				d := retryDelay(resp, i)
+				slog.DebugContext(ctx, "http retry", "method", r.Method, "url", redact(r.URL), "status", resp.StatusCode, "delay", d)
+				if err := sleep(ctx, d); err != nil {
 					return err
 				}
 				continue

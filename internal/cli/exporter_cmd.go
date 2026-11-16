@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"sort"
@@ -147,6 +148,8 @@ func (a *app) exporterCmd() *cobra.Command {
 				}
 				providers[name] = p
 			}
+			slog.DebugContext(ctx, "exporter config", "state", cfg.State, "secrets", cfg.Secrets, "providers", strings.Join(names, ","),
+				"policy_from_store", fromStore, "interval", interval, "listen", listen)
 			x := &exporter.Exporter{Store: st, Providers: providers, Policy: cfg.Policy, PolicyFromStore: fromStore, Version: a.version, Interval: interval}
 			go x.Run(ctx)
 			srv := &http.Server{Addr: listen, Handler: x, ReadHeaderTimeout: 10 * time.Second}

@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/hatedabamboo/orkeys/internal/manifest"
 	"github.com/hatedabamboo/orkeys/internal/state"
@@ -93,10 +94,11 @@ func (g GitHubPusher) Push(ctx context.Context, spec manifest.PushSpec, value st
 	if g.Workflows == nil {
 		return fmt.Errorf("github secret %s written; workflows not started: no workflow driver configured", c.Target())
 	}
+	// The index tells apart entries with the same workflow and other inputs.
 	var errs []error
-	for _, w := range runs {
+	for i, w := range runs {
 		if err := g.Workflows.Dispatch(ctx, w); err != nil {
-			errs = append(errs, fmt.Errorf("github secret %s written; workflow not started: %w", c.Target(), err))
+			errs = append(errs, fmt.Errorf("github secret %s written; workflow not started (workflows[%d]): %w", c.Target(), i, err))
 		}
 	}
 	return errors.Join(errs...)
@@ -175,6 +177,7 @@ func (e *Engine) pusher(typ string) (Pusher, error) {
 func (e *Engine) syncPush(ctx context.Context, k *manifest.Key, st *state.State) error {
 	push, drop := pushDiff(k, st)
 	if len(push) == 0 && len(drop) == 0 {
+		e.debug(ctx, "push consumers up to date", "key", st.Name)
 		return nil
 	}
 	var errs []error
@@ -184,10 +187,13 @@ func (e *Engine) syncPush(ctx context.Context, k *manifest.Key, st *state.State)
 			return fmt.Errorf("read key for push consumers: %w", err)
 		}
 		for _, t := range push {
+			start := time.Now()
 			p, err := e.pusher(t.Type)
 			if err == nil {
 				err = p.Push(ctx, t.Spec, value)
 			}
+			e.debug(ctx, "push consumer", "key", st.Name, "target", t.Key(), "key_id", short(st.KeyID),
+				"duration", time.Since(start).Round(time.Millisecond), "ok", err == nil)
 			if err != nil {
 				errs = append(errs, err)
 				continue
@@ -204,6 +210,7 @@ func (e *Engine) syncPush(ctx context.Context, k *manifest.Key, st *state.State)
 		if err == nil {
 			err = p.Remove(ctx, id)
 		}
+		e.debug(ctx, "remove push consumer", "key", st.Name, "target", key, "ok", err == nil)
 		if err != nil {
 			errs = append(errs, err)
 			continue
@@ -264,7 +271,12 @@ func (e *Engine) notifyConsumers(ctx context.Context, k *manifest.Key) error {
 		go func() {
 			defer wg.Done()
 			defer func() { <-sem }()
-			if err := n.Notify(ctx, spec); err != nil {
+			start := time.Now()
+			e.debug(ctx, "notify consumer", "key", k.Name, "type", c.Type)
+			err := n.Notify(ctx, spec)
+			e.debug(ctx, "notify consumer done", "key", k.Name, "type", c.Type,
+				"duration", time.Since(start).Round(time.Millisecond), "ok", err == nil)
+			if err != nil {
 				fail(err)
 			}
 		}()

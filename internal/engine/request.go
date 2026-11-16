@@ -79,6 +79,8 @@ func (e *Engine) Request(ctx context.Context, r Request) (*Issued, error) {
 		ttl = r.TTL
 	}
 
+	e.debug(ctx, "request", "user", r.User, "team", team.Team, "kind", r.Kind, "provider", r.Provider, "limit", limit,
+		"reset", reset, "ttl", ttl)
 	states, err := e.listStates(ctx)
 	if err != nil {
 		return nil, err
@@ -90,6 +92,8 @@ func (e *Engine) Request(ctx context.Context, r Request) (*Issued, error) {
 			total += st.LimitUSD
 		}
 	}
+	e.debug(ctx, "request: active keys of user", "user", r.User, "kind", r.Kind, "active", active, "total_limit", total,
+		"max_active", pol.MaxActive, "max_total_limit", pol.MaxTotalLimit)
 	if pol.MaxActive > 0 && active >= pol.MaxActive {
 		return nil, fmt.Errorf("%s already has %d active %s key(s); the limit is %d. Wait for one to expire", r.User, active, r.Kind, pol.MaxActive)
 	}
@@ -116,11 +120,14 @@ func (e *Engine) Request(ctx context.Context, r Request) (*Issued, error) {
 	} else if prev != nil {
 		return nil, fmt.Errorf("key %s exists already; request again", name)
 	}
+	e.debug(ctx, "request: create provider key", "name", name, "provider", r.Provider, "native_expiry", spec.ExpiresAt != nil)
 	pk, secret, err := p.Create(ctx, spec)
 	if err != nil {
 		return nil, err
 	}
+	e.debug(ctx, "request: provider key created", "name", name, "key_id", short(pk.ID))
 	undo := func(err error) (*Issued, error) {
+		e.debug(ctx, "request: undo: delete new key", "name", name, "key_id", short(pk.ID), "cause", err)
 		dctx, cancel := detached(ctx)
 		defer cancel()
 		if derr := p.Delete(dctx, pk.ID); derr != nil {

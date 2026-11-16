@@ -46,6 +46,8 @@ func (a *app) loadInventory() (*manifest.Inventory, error) {
 	for _, p := range inv.Warnings() {
 		fmt.Fprintf(os.Stderr, "warning: %s\n", p)
 	}
+	slog.Debug("inventory loaded", "repo", a.repo, "teams", len(inv.Teams), "keys", len(inv.Keys),
+		"providers", len(inv.Policy.Providers), "state", inv.Policy.State, "secrets", cmp.Or(inv.Policy.Secrets, "vault"))
 	return inv, nil
 }
 
@@ -117,6 +119,7 @@ func providerFromSecrets(ctx context.Context, sec secrets.Store, name string, cf
 	info, _ := provider.Lookup(kind)
 	envKey := providerEnv(name, "KEY")
 	if v := strings.TrimSpace(os.Getenv(envKey)); v != "" {
+		slog.DebugContext(ctx, "provider management key from env", "provider", name, "kind", kind, "env", envKey)
 		pc.Key = v
 		pc.SelfID = os.Getenv(providerEnv(name, "SELF_ID"))
 		return provider.New(kind, pc)
@@ -124,6 +127,7 @@ func providerFromSecrets(ctx context.Context, sec secrets.Store, name string, cf
 	if cfg.ManagementKey == "" {
 		return nil, fmt.Errorf("%s: set %s or providers.%s.management_key", name, envKey, name)
 	}
+	slog.DebugContext(ctx, "provider management key from secrets store", "provider", name, "kind", kind, "path", cfg.ManagementKey)
 	data, err := sec.Read(ctx, cfg.ManagementKey)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w (or set %s)", name, err, envKey)
@@ -173,6 +177,7 @@ func (a *app) engine(ctx context.Context, outDir string) (*engine.Engine, error)
 		providers[name] = p
 	}
 	a.events = &eventPrinter{out: os.Stdout, quiet: a.output == "json"}
+	slog.DebugContext(ctx, "event sinks", "stdout", !a.events.quiet, "file", a.eventsFile, "webhook", a.eventsWebhook != "")
 	if a.eventsFile != "" {
 		f, err := os.OpenFile(a.eventsFile, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o644)
 		if err != nil {
@@ -201,7 +206,7 @@ func (a *app) engine(ctx context.Context, outDir string) (*engine.Engine, error)
 		RunURL:            state.RunURL(),
 	}
 	if a.logFormat == "json" {
-		e.Logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
+		e.Logger = slog.Default()
 	}
 	if tok := os.Getenv(EnvGitHubToken); tok != "" && inv.Policy.GitHub.Org != "" {
 		e.Org = &github.Org{Name: inv.Policy.GitHub.Org, Token: tok, API: inv.Policy.GitHub.APIURL}
@@ -210,6 +215,8 @@ func (a *app) engine(ctx context.Context, outDir string) (*engine.Engine, error)
 		gh := &github.Secrets{Token: tok, API: inv.Policy.GitHub.APIURL}
 		e.Pushers[manifest.ConsumerGitHub] = engine.GitHubPusher{Secrets: gh, Workflows: gh}
 	}
+	slog.DebugContext(ctx, "engine ready", "providers", len(providers), "github_org_checks", e.Org != nil,
+		"github_secrets", os.Getenv(EnvGitHubSecretsToken) != "" || os.Getenv(EnvGitHubToken) != "", "run_url", e.RunURL)
 	return e, nil
 }
 
@@ -223,6 +230,7 @@ func (a *app) withLock(ctx context.Context, e *engine.Engine, op string, fn func
 	if err != nil {
 		return err
 	}
+	start := time.Now()
 	e.Guard = le.Err
 	defer func() { e.Guard = nil }()
 	lctx, cancel := context.WithCancel(ctx)
@@ -244,6 +252,7 @@ func (a *app) withLock(ctx context.Context, e *engine.Engine, op string, fn func
 		}
 	}
 	cancel()
+	slog.DebugContext(ctx, "operation done", "operation", op, "duration", time.Since(start).Round(time.Millisecond), "error", err != nil)
 	if rerr := le.Release(context.Background()); rerr != nil {
 		err = errors.Join(err, fmt.Errorf("release lock %s: %w", le.ID(), rerr))
 	}

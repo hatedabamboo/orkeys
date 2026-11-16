@@ -35,6 +35,7 @@ func (e *Engine) Hygiene(ctx context.Context, dryRun bool) ([]Finding, error) {
 	now := e.now()
 	var out []Finding
 	var errs []error
+	e.debug(ctx, "hygiene", "states", len(states), "dry_run", dryRun, "org_checks", e.Org != nil)
 
 	ownersOK := false
 	if e.Org != nil && hasOwners(states) {
@@ -53,6 +54,7 @@ func (e *Engine) Hygiene(ctx context.Context, dryRun bool) ([]Finding, error) {
 			errs = append(errs, err)
 			continue
 		}
+		e.debug(ctx, "hygiene: org membership", "key", st.Name, "owner", st.Owner, "member", member)
 		if member {
 			continue
 		}
@@ -80,8 +82,10 @@ func (e *Engine) Hygiene(ctx context.Context, dryRun bool) ([]Finding, error) {
 		}
 		cur := provider.Find(lists[st.Provider], st.KeyID)
 		if cur == nil || now.Sub(st.CreatedAt) < unusedAfter {
+			e.debug(ctx, "hygiene: skip unused check", "key", st.Name, "at_provider", cur != nil, "created", st.CreatedAt)
 			continue
 		}
+		e.debug(ctx, "hygiene: last use", "key", st.Name, "last_used", cur.LastUsedAt)
 		if cur.LastUsedAt == nil || now.Sub(*cur.LastUsedAt) > unusedAfter {
 			out = append(out, Finding{Kind: "unused", Name: st.Name, Detail: "no use for 30 days"})
 		}
@@ -109,6 +113,7 @@ func (e *Engine) orgSane(ctx context.Context) error {
 		return err
 	}
 	sort.Strings(members)
+	e.debug(ctx, "hygiene: org sanity check", "team_members", len(members))
 	for _, m := range members {
 		ok, err := e.Org.IsMember(ctx, m)
 		if err != nil {

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"maps"
 	"net/http"
 	"os"
@@ -88,6 +89,8 @@ func (x *Exporter) Run(ctx context.Context) {
 }
 
 func (x *Exporter) Poll(ctx context.Context) {
+	pollStart := time.Now()
+	slog.DebugContext(ctx, "exporter poll", "providers", len(x.Providers), "policy_from_store", x.PolicyFromStore)
 	x.mu.Lock()
 	if x.lists == nil {
 		x.lists, x.pollOK, x.lastPoll = map[string][]provider.Key{}, map[string]bool{}, map[string]time.Time{}
@@ -100,6 +103,7 @@ func (x *Exporter) Poll(ctx context.Context) {
 	if err != nil {
 		x.logf("load states: %v", err)
 	} else {
+		slog.DebugContext(ctx, "exporter states loaded", "states", len(states))
 		x.states, x.stateAt = states, now
 	}
 	x.mu.Unlock()
@@ -120,7 +124,10 @@ func (x *Exporter) Poll(ctx context.Context) {
 	}
 
 	for name, p := range x.Providers {
+		start := time.Now()
 		keys, err := p.List(ctx)
+		slog.DebugContext(ctx, "exporter provider polled", "provider", name, "keys", len(keys), "ok", err == nil,
+			"duration", time.Since(start).Round(time.Millisecond))
 		x.mu.Lock()
 		x.pollOK[name] = err == nil
 		if err != nil {
@@ -134,7 +141,9 @@ func (x *Exporter) Poll(ctx context.Context) {
 	x.mu.Lock()
 	x.body = x.render()
 	x.ready = true
+	size := len(x.body)
 	x.mu.Unlock()
+	slog.DebugContext(ctx, "exporter poll done", "bytes", size, "duration", time.Since(pollStart).Round(time.Millisecond))
 }
 
 // loadPolicy reads the stored policy. On an error it keeps the last policy, and the load time shows the age.
@@ -161,12 +170,14 @@ func (x *Exporter) loadPolicy(ctx context.Context) {
 			x.logf("load policy: provider %s is new; restart the exporter to export its keys", name)
 		}
 	}
+	slog.DebugContext(ctx, "exporter policy loaded from state store", "providers", len(pol.Providers))
 	x.mu.Lock()
 	x.Policy, x.policyAt = pol, x.now()
 	x.mu.Unlock()
 }
 
 func (x *Exporter) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	slog.DebugContext(r.Context(), "exporter request", "method", r.Method, "path", r.URL.Path, "remote", r.RemoteAddr)
 	x.mu.RLock()
 	defer x.mu.RUnlock()
 	switch r.URL.Path {

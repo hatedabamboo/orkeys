@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -32,7 +33,10 @@ func (k *Kubectl) exec(ctx context.Context, cluster, ns string, args ...string) 
 	var stderr bytes.Buffer
 	cmd := exec.CommandContext(ctx, bin, full...)
 	cmd.Stderr = &stderr
+	start := time.Now()
 	out, err := cmd.Output()
+	slog.DebugContext(ctx, "kubectl", "bin", bin, "args", strings.Join(full, " "), "duration", time.Since(start).Round(time.Millisecond),
+		"exit_code", cmd.ProcessState.ExitCode(), "stdout_bytes", len(out))
 	if err != nil {
 		return out, fmt.Errorf("kubectl %s: %w: %s", strings.Join(full, " "), err, strings.TrimSpace(stderr.String()))
 	}
@@ -63,8 +67,11 @@ func (k *Kubectl) ForceSync(ctx context.Context, cluster, ns, name string) error
 			return err
 		}
 		if ok {
+			slog.DebugContext(ctx, "externalsecret synced", "cluster", cluster, "namespace", ns, "externalsecret", name)
 			return nil
 		}
+		slog.DebugContext(ctx, "externalsecret not synced yet", "cluster", cluster, "namespace", ns, "externalsecret", name,
+			"since", start, "next_poll", every)
 		if time.Now().After(deadline) {
 			return fmt.Errorf("externalsecret %s/%s/%s: not synced after %s", cluster, ns, name, timeout)
 		}
@@ -111,7 +118,8 @@ func (k *Kubectl) Restart(ctx context.Context, cluster, ns, target string) error
 	kind, name, _ := strings.Cut(target, "/")
 	switch strings.ToLower(kind) {
 	case "cronjob", "cj":
-		return nil // the next job run reads the new secret
+		slog.DebugContext(ctx, "skip restart of cronjob: the next job run reads the new secret", "cluster", cluster, "namespace", ns, "target", target)
+		return nil
 	case "deploy":
 		kind = "deployment"
 	case "sts":

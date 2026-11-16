@@ -211,6 +211,28 @@ JSON output holds the full API objects. `create --json` includes the secret in `
 - GET requests retry on HTTP 429 and 5xx, and use `Retry-After`. Writes do not retry.
 - Exit code is `0` on success and `1` on any error.
 
+### Debug logs
+
+Debug logs show URLs, secret paths, key names and key IDs. Keep them out of public CI logs if these names are
+private.
+
+`--debug` (or `ORKEYS_DEBUG=true`) writes debug logs to stderr. It works with all commands. `--log-format json` writes
+them as JSON records. The flag has priority over the env.
+
+Debug logs show:
+
+- each HTTP call to a provider, Vault and GitHub: method, URL without the query, status, attempt, time, retries;
+- each AWS call: service, operation, time, error;
+- each `kubectl` call: arguments, exit code, time; each poll of an ExternalSecret;
+- the state lock: acquire, wait, renew, release;
+- the inventory files that orkeys reads, and the state and secrets backends;
+- the steps of `plan`, `apply`, `rotate`, `request` and `hygiene`: the data of each key, the decision, the secret
+  writes, the consumer syncs, the revoke checks;
+- the exporter polls and the scrapes.
+
+Debug logs do not show key values, management keys, tokens, request and response bodies, URL queries or the
+`--events-webhook` URL.
+
 ### Shell completion
 
 ```sh
@@ -260,7 +282,8 @@ Global flags for inventory commands:
 |---|---|---|
 | `--events-file <path>` | `ORKEYS_EVENTS_FILE` | Append each event to the file as one JSON line, at the time of the event. A killed run keeps its events |
 | `--events-webhook <url>` | `ORKEYS_EVENTS_WEBHOOK` | POST each event as JSON to the URL. orkeys tries 3 times. Errors do not show the URL |
-| `--log-format text\|json` | | Progress logs on stderr as plain lines (default) or as JSON records |
+| `--log-format text\|json` | | Progress logs on stderr as plain lines (default) or as JSON records. Debug logs use the same format |
+| `--debug` | `ORKEYS_DEBUG` | Write debug logs to stderr. See [Debug logs](#debug-logs) |
 
 #### Apply safety
 
@@ -526,8 +549,10 @@ Limits:
 - orkeys does not start runs when you add `workflows` to a consumer that already holds the current key. The first
   runs come with the next write: a rotation, or a change of `secret`.
 - If one start fails, the retry starts all workflows of the consumer again, also the ones that started.
-- Two `github` consumers with the same workflow start two runs. One consumer cannot list the same `workflow` and
-  `ref` twice.
+- Two `github` consumers with the same workflow start two runs.
+- One consumer can list the same `workflow` more than once with another `ref` or other `inputs`. Each entry starts
+  one run. Two entries with the same `workflow`, `ref` and `inputs` are an error. An error of a start names its
+  entry: `workflows[1]`.
 
 Use `workflows` when a deploy workflow reads the secret and the service gets the key only from a deploy. After each
 write of the secret (create, import, rotation, reissue), orkeys starts a run of each workflow in the list:
@@ -541,6 +566,9 @@ consumers:
       - workflow: deploy.yml            # file in .github/workflows, or a workflow ID
         ref: main                       # branch or tag to run on; default: the default branch
         inputs: {environment: prod}     # workflow_dispatch inputs; optional
+      - workflow: deploy.yml            # same workflow again: a second run with other inputs
+        ref: main
+        inputs: {environment: canary}
       - workflow: smoke-test.yml        # runs on the default branch with no inputs
 ```
 
@@ -996,7 +1024,7 @@ Layout:
 | `internal/engine` | plan, apply, rotate, request, issued, revoke, state listing, hygiene, import; consumer drivers in `consumers.go`, recovery in `recover.go` |
 | `internal/exporter` | Prometheus metrics |
 | `internal/kube`, `internal/deliver`, `internal/github` | kubectl, age delivery, org membership, Actions secrets |
-| `internal/cli` | cobra commands: `openrouter.go`, `deepinfra.go`, `openai.go`, `keys.go`, `inventory.go`, `exporter_cmd.go`; wiring in `wire.go`, output in `render.go`, event webhook in `webhook.go` |
+| `internal/cli` | cobra commands: `openrouter.go`, `deepinfra.go`, `openai.go`, `keys.go`, `inventory.go`, `exporter_cmd.go`; wiring in `wire.go`, output in `render.go`, event webhook in `webhook.go`, log setup in `logging.go` |
 | `examples/inventory` | example inventory repository with rotate and hygiene workflows; a test keeps it valid |
 | `internal/values` | input parsing and formatting |
 

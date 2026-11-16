@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -267,12 +268,24 @@ func (c *GitHubConsumer) validateWorkflow(add func(string, ...any)) {
 		if w.Ref != "" && (strings.ContainsAny(w.Ref, " ~^:?*[\\") || strings.HasPrefix(w.Ref, "-")) {
 			add(".workflows[%d].ref: %q is not a branch or tag name", i, w.Ref)
 		}
-		id := w.Workflow + "@" + w.Ref
+		id := w.runID()
 		if j, dup := seen[id]; dup {
-			add(".workflows[%d]: same workflow and ref as workflows[%d]", i, j)
+			add(".workflows[%d]: same workflow, ref and inputs as workflows[%d]", i, j)
 		}
 		seen[id] = i
 	}
+}
+
+// runID identifies a run by workflow, ref and inputs. Entries with the same workflow and other inputs are
+// different runs. An empty inputs map and no inputs are the same.
+func (w GitHubWorkflowSpec) runID() string {
+	keys := slices.Sorted(maps.Keys(w.Inputs))
+	var b strings.Builder
+	b.WriteString(strconv.Quote(w.Workflow) + "@" + strconv.Quote(w.Ref))
+	for _, k := range keys {
+		b.WriteString(" " + strconv.Quote(k) + "=" + strconv.Quote(w.Inputs[k]))
+	}
+	return b.String()
 }
 
 // Target returns the GitHub secret of the consumer.

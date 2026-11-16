@@ -23,6 +23,8 @@ func (e *Engine) resume(ctx context.Context, k *manifest.Key, st *state.State) (
 		if err != nil {
 			return nil, fmt.Errorf("%s: read metadata of %s: %w", st.Name, r, err)
 		}
+		e.debug(ctx, "resume: secret metadata", "key", st.Name, "secret", r.String(),
+			"secret_key_id", short(meta[secrets.MetaKeyID]), "state_key_id", short(st.KeyID))
 		if meta[secrets.MetaKeyID] != st.KeyID {
 			complete = false
 			continue

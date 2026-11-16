@@ -322,7 +322,33 @@ ttl: 30d
 secret: {path: kv/llm/c}
 consumers:
   - {type: github, repo: a/b, name: X, workflows: [{workflow: deploy.yml}, {workflow: deploy.yml}]}
-`, "workflows[1]: same workflow and ref as workflows[0]"},
+`, "workflows[1]: same workflow, ref and inputs as workflows[0]"},
+		"github workflow twice with the same inputs": {"teams/chat-core/prod-chat-core-c.yaml", `
+name: prod-chat-core-c
+kind: production
+provider: openrouter
+env: prod
+service: c
+description: d
+budget: {limit: 10}
+ttl: 30d
+secret: {path: kv/llm/c}
+consumers:
+  - {type: github, repo: a/b, name: X, workflows: [{workflow: deploy.yml, inputs: {env: prod}}, {workflow: deploy.yml, inputs: {env: prod}}]}
+`, "workflows[1]: same workflow, ref and inputs as workflows[0]"},
+		"github workflow empty inputs is no inputs": {"teams/chat-core/prod-chat-core-c.yaml", `
+name: prod-chat-core-c
+kind: production
+provider: openrouter
+env: prod
+service: c
+description: d
+budget: {limit: 10}
+ttl: 30d
+secret: {path: kv/llm/c}
+consumers:
+  - {type: github, repo: a/b, name: X, workflows: [{workflow: deploy.yml}, {workflow: deploy.yml, inputs: {}}]}
+`, "workflows[1]: same workflow, ref and inputs as workflows[0]"},
 		"github workflows not a list of maps": {"teams/chat-core/prod-chat-core-c.yaml", `
 name: prod-chat-core-c
 kind: production
@@ -926,6 +952,42 @@ func TestSecretList(t *testing.T) {
 	_ = os.WriteFile(f, []byte(strings.Replace(body, "field: OR_KEY", "feild: OR_KEY", 1)), 0o644)
 	if _, err := Load(root); err == nil || !strings.Contains(err.Error(), "feild") {
 		t.Fatalf("want unknown field error, got %v", err)
+	}
+}
+
+func TestGitHubWorkflowSameFileOtherInputs(t *testing.T) {
+	root := copyRepo(t)
+	body := `
+name: prod-chat-core-c
+kind: production
+provider: openrouter
+env: prod
+service: c
+description: d
+budget: {limit: 10}
+ttl: 30d
+secret: {path: kv/llm/c}
+consumers:
+  - type: github
+    repo: a/b
+    name: X
+    workflows:
+      - {workflow: deploy.yml, inputs: {env: prod}}
+      - {workflow: deploy.yml, inputs: {env: staging}}
+      - {workflow: deploy.yml, ref: release, inputs: {env: prod}}
+      - {workflow: deploy.yml}
+`
+	_ = os.WriteFile(filepath.Join(root, "teams/chat-core/prod-chat-core-c.yaml"), []byte(body), 0o644)
+	inv, err := Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ps := inv.Validate(); len(ps) != 0 {
+		t.Fatalf("problems: %v", ps)
+	}
+	runs := inv.Key("prod-chat-core-c").Consumers[0].Spec.(*GitHubConsumer).Runs()
+	if len(runs) != 4 || runs[0].Inputs["env"] != "prod" || runs[1].Inputs["env"] != "staging" || runs[2].Ref != "release" {
+		t.Fatalf("runs: %+v", runs)
 	}
 }
 

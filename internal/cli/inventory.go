@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -133,6 +134,7 @@ func writePlanFile(path string, plan *engine.Plan) error {
 		_ = f.Close()
 		return err
 	}
+	slog.Debug("plan file written", "file", path, "actions", len(plan.Actions), "fingerprint", plan.Fingerprint)
 	return f.Close()
 }
 
@@ -148,6 +150,7 @@ func readPlanFile(path string) (*engine.Plan, error) {
 	if p.Fingerprint == "" {
 		return nil, fmt.Errorf("plan file %s: no fingerprint; save it with plan --out", path)
 	}
+	slog.Debug("plan file read", "file", path, "actions", len(p.Actions), "fingerprint", p.Fingerprint)
 	return &p, nil
 }
 
@@ -224,6 +227,7 @@ func (a *app) savePolicy(ctx context.Context, store state.Store) error {
 	if err != nil {
 		return fmt.Errorf("save policy to the state store: %w", err)
 	}
+	slog.DebugContext(ctx, "policy copy in the state store", "changed", wrote)
 	if wrote && a.output != "json" {
 		fmt.Println("policy.yaml saved to the state store")
 	}

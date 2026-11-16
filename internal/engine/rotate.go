@@ -33,9 +33,12 @@ func (e *Engine) Rotate(ctx context.Context, opt RotateOptions) error {
 	if err != nil {
 		return err
 	}
+	e.debug(ctx, "rotate", "states", len(states), "only", strings.Join(opt.Only, ","), "retry", strings.Join(opt.Retry, ","),
+		"now", strings.Join(opt.Now, ","))
 	var errs []error
 	for _, st := range states {
 		if len(opt.Only) > 0 && !slices.Contains(opt.Only, st.Name) {
+			e.debug(ctx, "rotate: skip key: not in --only", "key", st.Name)
 			continue
 		}
 		if err := ctx.Err(); err != nil {
@@ -52,11 +55,14 @@ func (e *Engine) Rotate(ctx context.Context, opt RotateOptions) error {
 
 func (e *Engine) rotateOne(ctx context.Context, st *state.State, keys []provider.Key, retry, force bool) error {
 	if st.TrackOnly {
+		e.debug(ctx, "rotate: skip key: track_only", "key", st.Name)
 		return nil
 	}
 	now := e.now()
 	kp := e.Inv.Policy.Kind(st.Kind)
 	changed := false
+	e.debug(ctx, "rotate: key", "key", st.Name, "kind", st.Kind, "key_id", short(st.KeyID), "phase", st.Phase,
+		"rotation", st.Rotation, "expires", st.ExpiresAt, "pending_revokes", len(st.PendingRevokes), "retry", retry, "force", force)
 
 	switch {
 	case e.Inv.Policy.Requested(st.Kind, st.Owner):
@@ -76,6 +82,7 @@ func (e *Engine) rotateOne(ctx context.Context, st *state.State, keys []provider
 	default:
 		k := e.Inv.Key(st.Name)
 		if k == nil {
+			e.debug(ctx, "rotate: skip key: no manifest; apply revokes it", "key", st.Name)
 			return nil
 		}
 		if st.Phase == state.PhaseIssuing {
@@ -95,6 +102,8 @@ func (e *Engine) rotateOne(ctx context.Context, st *state.State, keys []provider
 			changed = true
 		}
 		due := !now.Before(st.ExpiresAt.Add(-kp.RotateBefore.Duration)) && !k.Disabled
+		e.debug(ctx, "rotate: due check", "key", st.Name, "due", due, "rotate_from", st.ExpiresAt.Add(-kp.RotateBefore.Duration),
+			"disabled", k.Disabled, "unsynced_revokes", hasUnsynced(st))
 		if force && k.Disabled {
 			return errors.New("key is disabled in the manifest; it does not rotate")
 		}
@@ -114,6 +123,7 @@ func (e *Engine) rotateOne(ctx context.Context, st *state.State, keys []provider
 			changed = false
 		}
 		if st.Rotation == state.RotationPending {
+			e.debug(ctx, "rotate: sync consumers", "key", st.Name, "key_id", short(st.KeyID), "consumers", len(k.Consumers))
 			if err := e.syncConsumers(ctx, k, st); err != nil {
 				if ctx.Err() != nil {
 					// A stopped run is not a failed sync. The next run syncs the consumers again.
@@ -149,7 +159,16 @@ func (e *Engine) rotateOne(ctx context.Context, st *state.State, keys []provider
 	if changed {
 		return e.putState(ctx, st)
 	}
+	e.debug(ctx, "rotate: no change", "key", st.Name)
 	return nil
+}
+
+// fmtUSD formats a spend for logs. Nil is "unknown": the provider reports no spend.
+func fmtUSD(v *float64) string {
+	if v == nil {
+		return "unknown"
+	}
+	return fmt.Sprintf("%.4f", *v)
 }
 
 func hasUnsynced(st *state.State) bool {
@@ -177,6 +196,8 @@ func (e *Engine) processRevokes(ctx context.Context, st *state.State, keys []pro
 		if old != nil {
 			usage = old.UsageUSD
 		}
+		e.debug(ctx, "revoke check", "key", st.Name, "old_key_id", short(pr.KeyID), "source", pr.Source,
+			"at_provider", old != nil, "after", pr.After, "check_from", pr.CheckFrom, "usage", fmtUSD(usage), "baseline", fmtUSD(pr.Baseline))
 		if !pr.After.IsZero() && !now.Before(pr.CheckFrom) && usage != nil {
 			switch {
 			case pr.Baseline == nil:
@@ -200,6 +221,7 @@ func (e *Engine) processRevokes(ctx context.Context, st *state.State, keys []pro
 			}
 		}
 		if pr.After.IsZero() || now.Before(pr.After) {
+			e.debug(ctx, "revoke check: wait", "key", st.Name, "old_key_id", short(pr.KeyID), "synced", !pr.After.IsZero(), "after", pr.After)
 			keep = append(keep, pr)
 			continue
 		}
@@ -223,6 +245,7 @@ func (e *Engine) processRevokes(ctx context.Context, st *state.State, keys []pro
 		}
 		changed = true
 		for _, r := range pr.Secrets {
+			e.debug(ctx, "delete old secret field", "key", st.Name, "secret", r.String())
 			if err := e.Secrets.DeleteField(ctx, r.Path, r.Field); err != nil {
 				e.logf("%s: remove old secret field %s: %v", st.Name, r, err)
 			}

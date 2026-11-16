@@ -3,14 +3,18 @@ package backend
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	awsmiddleware "github.com/aws/aws-sdk-go-v2/aws/middleware"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/secretsmanager"
+	"github.com/aws/smithy-go/middleware"
 
 	"github.com/hatedabamboo/orkeys/internal/awssm"
 	"github.com/hatedabamboo/orkeys/internal/s3store"
@@ -51,9 +55,29 @@ func (f *Factory) awsConfig(ctx context.Context) (aws.Config, error) {
 		if err != nil {
 			return aws.Config{}, fmt.Errorf("aws config: %w", err)
 		}
+		c.APIOptions = append(c.APIOptions, addDebugLog)
+		slog.DebugContext(ctx, "aws config loaded", "region", c.Region)
 		f.aws = &c
 	}
 	return *f.aws, nil
+}
+
+// addDebugLog logs each AWS call: service, operation, time and error.
+// It does not log the input or the output. They can hold secret values.
+// The Initialize step runs once per call, so the time includes the SDK retries.
+func addDebugLog(s *middleware.Stack) error {
+	return s.Initialize.Add(middleware.InitializeMiddlewareFunc("OrkeysDebugLog",
+		func(ctx context.Context, in middleware.InitializeInput, next middleware.InitializeHandler) (middleware.InitializeOutput, middleware.Metadata, error) {
+			start := time.Now()
+			out, md, err := next.HandleInitialize(ctx, in)
+			attrs := []any{"service", awsmiddleware.GetServiceID(ctx), "operation", awsmiddleware.GetOperationName(ctx),
+				"duration", time.Since(start).Round(time.Millisecond)}
+			if err != nil {
+				attrs = append(attrs, "error", err)
+			}
+			slog.DebugContext(ctx, "aws call", attrs...)
+			return out, md, err
+		}), middleware.After)
 }
 
 func ParseState(raw string) (scheme, bucketOrPath, prefix string, err error) {
@@ -87,12 +111,14 @@ func (f *Factory) State(ctx context.Context, raw string) (state.Store, error) {
 		if err != nil {
 			return nil, err
 		}
+		slog.DebugContext(ctx, "state store", "backend", "vault", "path", a)
 		return &vault.StateStore{C: c, Prefix: a}, nil
 	}
 	cfg, err := f.awsConfig(ctx)
 	if err != nil {
 		return nil, err
 	}
+	slog.DebugContext(ctx, "state store", "backend", "s3", "bucket", a, "prefix", b)
 	return &s3store.StateStore{API: s3.NewFromConfig(cfg), Bucket: a, Prefix: b}, nil
 }
 
@@ -103,12 +129,14 @@ func (f *Factory) Secrets(ctx context.Context, kind string) (secrets.Store, erro
 		if err != nil {
 			return nil, err
 		}
+		slog.DebugContext(ctx, "secrets store", "backend", "vault")
 		return &vault.SecretStore{C: c}, nil
 	case SecretsAWS:
 		cfg, err := f.awsConfig(ctx)
 		if err != nil {
 			return nil, err
 		}
+		slog.DebugContext(ctx, "secrets store", "backend", "aws")
 		return &awssm.SecretStore{API: secretsmanager.NewFromConfig(cfg), RecoveryWindow: 7}, nil
 	}
 	return nil, fmt.Errorf("secrets %q: want vault or aws", kind)

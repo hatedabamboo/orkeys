@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
@@ -57,12 +58,15 @@ func (s *Secrets) do(ctx context.Context, method, path string, body any) (int, [
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
+	start := time.Now()
 	resp, err := s.client().Do(req)
 	if err != nil {
+		slog.DebugContext(ctx, "github request failed", "method", method, "path", path, "duration", time.Since(start).Round(time.Millisecond))
 		return 0, nil, err
 	}
 	defer func() { _ = resp.Body.Close() }()
 	b, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	slog.DebugContext(ctx, "github request", "method", method, "path", path, "status", resp.StatusCode, "duration", time.Since(start).Round(time.Millisecond))
 	return resp.StatusCode, b, err
 }
 
