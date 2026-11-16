@@ -4,6 +4,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/signal"
 	"strings"
@@ -44,6 +45,7 @@ type app struct {
 	eventsFile    string
 	eventsWebhook string
 	logFormat     string
+	debug         bool
 }
 
 // Execute runs the CLI and returns the process exit code.
@@ -97,6 +99,15 @@ Environment for inventory commands:
 			if a.logFormat != "text" && a.logFormat != "json" {
 				return fmt.Errorf("invalid --log-format %q: want text|json", a.logFormat)
 			}
+			if !cmd.Flags().Changed("debug") {
+				d, err := envDebug()
+				if err != nil {
+					return err
+				}
+				a.debug = d
+			}
+			slog.SetDefault(slog.New(newLogHandler(os.Stderr, a.logFormat, a.debug)))
+			slog.Debug("start", "version", a.version, "command", cmd.CommandPath(), "repo", a.repo, "output", a.output, "timeout", a.timeout)
 			switch a.output {
 			case "table", "wide", "json":
 				return nil
@@ -113,7 +124,8 @@ Environment for inventory commands:
 	pf.DurationVar(&a.lockWait, "lock-wait", 5*time.Minute, "how long to wait for the state lock")
 	pf.StringVar(&a.eventsFile, "events-file", os.Getenv(EnvEventsFile), "append each event to this file as one JSON line (env "+EnvEventsFile+")")
 	pf.StringVar(&a.eventsWebhook, "events-webhook", os.Getenv(EnvEventsWebhook), "POST each event as JSON to this URL (env "+EnvEventsWebhook+")")
-	pf.StringVar(&a.logFormat, "log-format", "text", "log format of inventory commands on stderr: text|json")
+	pf.StringVar(&a.logFormat, "log-format", "text", "log format on stderr: text|json")
+	pf.BoolVar(&a.debug, "debug", false, "write debug logs to stderr (env "+EnvDebug+")")
 
 	root.AddCommand(a.openrouterCmd(), a.deepinfraCmd(), a.openaiCmd(), a.keysCmd())
 	root.AddCommand(a.inventoryCmds()...)

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
@@ -44,11 +45,14 @@ func (o *Org) get(ctx context.Context, path string) (int, []byte, error) {
 	}
 	req.Header.Set("Authorization", "Bearer "+o.Token)
 	req.Header.Set("Accept", "application/vnd.github+json")
+	start := time.Now()
 	resp, err := o.client().Do(req)
 	if err != nil {
+		slog.DebugContext(ctx, "github request failed", "method", http.MethodGet, "path", path, "duration", time.Since(start).Round(time.Millisecond))
 		return 0, nil, err
 	}
 	defer func() { _ = resp.Body.Close() }()
+	slog.DebugContext(ctx, "github request", "method", http.MethodGet, "path", path, "status", resp.StatusCode, "duration", time.Since(start).Round(time.Millisecond))
 	if resp.StatusCode != http.StatusOK {
 		return resp.StatusCode, nil, nil
 	}

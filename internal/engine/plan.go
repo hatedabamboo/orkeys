@@ -170,6 +170,7 @@ func (e *Engine) plan(ctx context.Context) (*Plan, map[string][]provider.Key, er
 	if e.Org != nil {
 		for _, n := range e.Inv.TeamNames() {
 			if slug := e.slugOf(e.Inv.Teams[n]); slug != "" {
+				e.debug(ctx, "plan: check GitHub team", "team", n, "slug", slug)
 				if err := e.Org.CheckTeam(ctx, slug); err != nil {
 					plan.Warnings = append(plan.Warnings, fmt.Sprintf("teams/%s/team.yaml: %v", n, err))
 				}
@@ -184,6 +185,13 @@ func (e *Engine) plan(ctx context.Context) (*Plan, map[string][]provider.Key, er
 		st := byName[k.Name]
 		act := Action{Name: k.Name, Team: k.Team, Provider: k.Provider, Key: k, State: st}
 		limit := k.Budget.Limit
+		if st == nil {
+			e.debug(ctx, "plan: key", "key", k.Name, "provider", k.Provider, "kind", k.Kind, "state", false,
+				"import", k.Import != nil, "track_only", k.TrackOnly())
+		} else {
+			e.debug(ctx, "plan: key", "key", k.Name, "provider", k.Provider, "kind", k.Kind, "state", true,
+				"key_id", short(st.KeyID), "phase", st.Phase, "rotation", st.Rotation, "track_only", k.TrackOnly() || st.TrackOnly)
+		}
 
 		if k.TrackOnly() || (st != nil && st.TrackOnly) {
 			e.planTracked(plan, act, lists[k.Provider], known)
@@ -231,6 +239,8 @@ func (e *Engine) plan(ctx context.Context) (*Plan, map[string][]provider.Key, er
 		if err != nil {
 			return nil, nil, err
 		}
+		e.debug(ctx, "plan: provider key", "key", k.Name, "key_id", short(cur.ID), "disabled", cur.Disabled,
+			"limit", fmtLimit(cur), "secret_drift", drift != "")
 		if drift != "" {
 			act.Type, act.Detail = ActReissue, drift
 			plan.Actions = append(plan.Actions, act)
@@ -285,6 +295,7 @@ func (e *Engine) plan(ctx context.Context) (*Plan, map[string][]provider.Key, er
 		if e.Inv.Policy.Requested(st.Kind, st.Owner) || e.Inv.Key(st.Name) != nil {
 			continue
 		}
+		e.debug(ctx, "plan: state without manifest", "key", st.Name, "track_only", st.TrackOnly, "kind", st.Kind, "owner", st.Owner)
 		if st.TrackOnly {
 			plan.Actions = append(plan.Actions, Action{
 				Type: ActUntrack, Name: st.Name, Team: st.Team, Provider: st.Provider, State: st,
@@ -311,6 +322,7 @@ func (e *Engine) plan(ctx context.Context) (*Plan, map[string][]provider.Key, er
 				continue
 			}
 			if e.Inv.Policy.IgnoresUnmanaged(name, pk) {
+				e.debug(ctx, "plan: unmanaged key ignored by policy", "provider", name, "key_id", short(pk.ID), "name", pk.Name)
 				continue
 			}
 			plan.Unmanaged = append(plan.Unmanaged, ForeignKey{Provider: name, ID: pk.ID, Name: pk.Name})
@@ -319,6 +331,8 @@ func (e *Engine) plan(ctx context.Context) (*Plan, map[string][]provider.Key, er
 	sortForeign(plan.Unmanaged)
 	plan.Warnings = append(plan.Warnings, e.staleIgnores(lists, known)...)
 	plan.Fingerprint = plan.fingerprint()
+	e.debug(ctx, "plan done", "actions", len(plan.Actions), "unmanaged", len(plan.Unmanaged), "warnings", len(plan.Warnings),
+		"fingerprint", plan.Fingerprint)
 	if n, limit := plan.Deletes(), e.Inv.Policy.DeleteLimit(); n > limit {
 		plan.Warnings = append(plan.Warnings, fmt.Sprintf(
 			"%d keys to revoke, more than max_deletes %d; apply refuses this plan without --allow-deletes %d", n, limit, n))

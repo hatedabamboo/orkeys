@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/url"
 
@@ -20,6 +21,7 @@ func (s *Secrets) Dispatch(ctx context.Context, w manifest.GitHubWorkflow) error
 			return fmt.Errorf("github run workflow %s: %w", w, err)
 		}
 	}
+	slog.DebugContext(ctx, "github dispatch workflow", "repo", w.Repo, "workflow", w.Workflow, "ref", ref, "inputs", len(w.Inputs))
 	req := map[string]any{"ref": ref}
 	if len(w.Inputs) > 0 {
 		req["inputs"] = w.Inputs

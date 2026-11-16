@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -37,6 +38,7 @@ func (a *AgeSSH) Deliver(ctx context.Context, user, name, secret string) (string
 			recipients = append(recipients, r)
 		}
 	}
+	slog.DebugContext(ctx, "ssh keys of user", "user", user, "keys", len(lines), "age_recipients", len(recipients))
 	if len(recipients) == 0 {
 		return "", fmt.Errorf("user %s has no ssh-ed25519 or ssh-rsa key on GitHub", user)
 	}
@@ -59,6 +61,7 @@ func (a *AgeSSH) Deliver(ctx context.Context, user, name, secret string) (string
 		return "", err
 	}
 	path := filepath.Join(a.OutDir, name+".age")
+	slog.DebugContext(ctx, "write encrypted key", "user", user, "file", path)
 	return path, os.WriteFile(path, buf.Bytes(), 0o644)
 }
 
@@ -71,11 +74,14 @@ func (a *AgeSSH) githubKeys(ctx context.Context, user string) ([]string, error) 
 	if err != nil {
 		return nil, err
 	}
+	start := time.Now()
 	resp, err := (&http.Client{Timeout: 15 * time.Second}).Do(req)
 	if err != nil {
+		slog.DebugContext(ctx, "fetch ssh keys failed", "url", req.URL.String(), "duration", time.Since(start).Round(time.Millisecond))
 		return nil, err
 	}
 	defer func() { _ = resp.Body.Close() }()
+	slog.DebugContext(ctx, "fetch ssh keys", "url", req.URL.String(), "status", resp.StatusCode, "duration", time.Since(start).Round(time.Millisecond))
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("github keys for %s: HTTP %d", user, resp.StatusCode)
 	}

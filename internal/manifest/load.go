@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -46,6 +47,7 @@ func Load(root string) (*Inventory, error) {
 		}
 		for _, f := range files {
 			if f.IsDir() || !isYAML(f.Name()) {
+				slog.Debug("skip file: not YAML", "file", relPath(root, filepath.Join(dir, f.Name())))
 				continue
 			}
 			path := filepath.Join(dir, f.Name())
@@ -57,6 +59,7 @@ func Load(root string) (*Inventory, error) {
 					continue
 				}
 				inv.Teams[d.Name()] = t
+				slog.Debug("team loaded", "file", rel, "team", d.Name())
 				continue
 			}
 			k := &Key{Team: d.Name(), Path: rel}
@@ -65,6 +68,7 @@ func Load(root string) (*Inventory, error) {
 				continue
 			}
 			inv.Keys = append(inv.Keys, k)
+			slog.Debug("key manifest loaded", "file", rel, "name", k.Name, "kind", k.Kind, "provider", k.Provider)
 		}
 	}
 	sort.Slice(inv.Keys, func(i, j int) bool { return inv.Keys[i].Name < inv.Keys[j].Name })
@@ -100,6 +104,7 @@ func LoadPolicy(path string) (*Policy, error) {
 	if err != nil {
 		return p, fmt.Errorf("%s: %w", path, err)
 	}
+	slog.Debug("policy loaded", "file", path, "envs", len(p.Envs), "kinds", len(p.Kinds), "providers", len(p.Providers))
 	return p, nil
 }
 

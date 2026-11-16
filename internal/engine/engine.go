@@ -95,6 +95,15 @@ func (e *Engine) logf(format string, args ...any) {
 	fmt.Fprintf(w, format+"\n", args...)
 }
 
+// debug writes a debug record to Logger, or to the default logger when Logger is nil.
+func (e *Engine) debug(ctx context.Context, msg string, args ...any) {
+	l := e.Logger
+	if l == nil {
+		l = slog.Default()
+	}
+	l.DebugContext(ctx, msg, args...)
+}
+
 func (e *Engine) listAll(ctx context.Context) (map[string][]provider.Key, error) {
 	out := map[string][]provider.Key{}
 	names := make([]string, 0, len(e.Providers))
@@ -103,10 +112,12 @@ func (e *Engine) listAll(ctx context.Context) (map[string][]provider.Key, error)
 	}
 	slices.Sort(names)
 	for _, n := range names {
+		start := time.Now()
 		keys, err := e.Providers[n].List(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("%s: list keys: %w", n, err)
 		}
+		e.debug(ctx, "provider keys listed", "provider", n, "keys", len(keys), "duration", time.Since(start).Round(time.Millisecond))
 		out[n] = keys
 	}
 	return out, nil
@@ -175,6 +186,7 @@ func (e *Engine) putState(ctx context.Context, st *state.State) error {
 			// A retry does not fix a conflict. Another process has changed the state.
 			break
 		}
+		e.debug(ctx, "save state failed; try again", "key", st.Name, "attempt", i+1, "error", err)
 		t := time.NewTimer(time.Duration(i+1) * d)
 		select {
 		case <-dctx.Done():
@@ -186,15 +198,19 @@ func (e *Engine) putState(ctx context.Context, st *state.State) error {
 	if err != nil {
 		return fmt.Errorf("save state %s (provider key %s): %w", st.Name, st.KeyID, err)
 	}
+	e.debug(ctx, "state saved", "key", st.Name, "key_id", short(st.KeyID), "phase", st.Phase, "rotation", st.Rotation,
+		"pending_revokes", len(st.PendingRevokes), "rev", st.Rev)
 	return nil
 }
 
 // listStates reads all states and refuses states that a newer orkeys wrote.
 func (e *Engine) listStates(ctx context.Context) ([]*state.State, error) {
+	start := time.Now()
 	states, err := e.State.ListStates(ctx)
 	if err != nil {
 		return nil, err
 	}
+	e.debug(ctx, "states listed", "states", len(states), "duration", time.Since(start).Round(time.Millisecond))
 	return states, state.CheckSchema(states...)
 }
 
@@ -217,10 +233,13 @@ func (e *Engine) issue(ctx context.Context, k *manifest.Key, orig *state.State, 
 	if p.Caps().NativeExpiry {
 		spec.ExpiresAt = &exp
 	}
+	e.debug(ctx, "create provider key", "key", k.Name, "provider", k.Provider, "name", spec.Name, "limit", limit,
+		"reset", spec.LimitReset, "native_expiry", spec.ExpiresAt != nil, "rotate_reason", rotateReason)
 	pk, secret, err := p.Create(ctx, spec)
 	if err != nil {
 		return nil, fmt.Errorf("%s: create key: %w", k.Name, err)
 	}
+	e.debug(ctx, "provider key created", "key", k.Name, "key_id", short(pk.ID), "expires", exp)
 
 	st := e.stateFor(k)
 	st.KeyID, st.CreatedAt, st.ExpiresAt = pk.ID, now, exp
@@ -243,6 +262,7 @@ func (e *Engine) issue(ctx context.Context, k *manifest.Key, orig *state.State, 
 	}
 
 	undo := func(cause error) error {
+		e.debug(ctx, "undo key issue", "key", k.Name, "key_id", short(pk.ID), "restore_state", orig != nil, "cause", cause)
 		dctx, cancel := detached(ctx)
 		defer cancel()
 		errs := []error{cause}
@@ -305,6 +325,7 @@ func (e *Engine) writeSecrets(ctx context.Context, k *manifest.Key, refs []state
 	}
 	var done []prev
 	restore := func(cause error) error {
+		e.debug(ctx, "restore secrets", "key", k.Name, "written", len(done), "cause", cause)
 		dctx, cancel := detached(ctx)
 		defer cancel()
 		errs := []error{cause}
@@ -333,6 +354,7 @@ func (e *Engine) writeSecrets(ctx context.Context, k *manifest.Key, refs []state
 		if err := e.Secrets.Put(ctx, r.Path, r.Field, value, secretMeta(k, keyID)); err != nil {
 			return restore(fmt.Errorf("write secret %s: %w", r, err))
 		}
+		e.debug(ctx, "secret written", "key", k.Name, "secret", r.String(), "key_id", short(keyID), "replaced", data[r.Field] != "")
 		done = append(done, prev{ref: r, value: data[r.Field]})
 	}
 	return nil
@@ -352,5 +374,6 @@ func (e *Engine) revoke(ctx context.Context, providerName, id string) error {
 	if err != nil {
 		return err
 	}
+	e.debug(ctx, "delete provider key", "provider", providerName, "key_id", short(id))
 	return p.Delete(ctx, id)
 }

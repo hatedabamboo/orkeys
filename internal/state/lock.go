@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"sync"
 	"time"
@@ -79,6 +80,7 @@ func Lock(ctx context.Context, l Locker, holder, operation string, ttl, wait tim
 		info := LockInfo{ID: NewLockID(), Holder: holder, Operation: operation, Created: now, Expires: now.Add(ttl)}
 		err := l.Acquire(ctx, info)
 		if err == nil {
+			slog.DebugContext(ctx, "state lock acquired", "id", info.ID, "holder", holder, "operation", operation, "expires", info.Expires)
 			rctx, cancel := context.WithCancel(context.Background())
 			le := &Lease{l: l, info: info, cancel: cancel, done: make(chan struct{}), lost: make(chan struct{})}
 			go le.renew(rctx, ttl)
@@ -88,6 +90,8 @@ func Lock(ctx context.Context, l Locker, holder, operation string, ttl, wait tim
 		if !errors.As(err, &locked) || time.Now().After(deadline) {
 			return nil, err
 		}
+		slog.DebugContext(ctx, "state lock held by another process; wait", "holder", locked.Info.Holder,
+			"operation", locked.Info.Operation, "expires", locked.Info.Expires, "deadline", deadline)
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
@@ -136,6 +140,7 @@ func (le *Lease) renew(ctx context.Context, ttl time.Duration) {
 		err := le.l.Renew(ctx, next)
 		switch {
 		case err == nil:
+			slog.Debug("state lock renewed", "id", next.ID, "expires", next.Expires)
 			le.info, expires = next, next.Expires
 			t.Reset(every)
 		case errors.Is(err, ErrLockLost):
@@ -147,6 +152,7 @@ func (le *Lease) renew(ctx context.Context, ttl time.Duration) {
 			le.fail(fmt.Errorf("%w: renewal failed until the lock expires at %s: %w", ErrLockLost, expires.Format(time.RFC3339), err))
 			return
 		default:
+			slog.Debug("state lock renewal failed; try again", "id", next.ID, "retry_in", retry, "expires", expires, "error", err)
 			t.Reset(retry)
 		}
 	}
@@ -155,5 +161,6 @@ func (le *Lease) renew(ctx context.Context, ttl time.Duration) {
 func (le *Lease) Release(ctx context.Context) error {
 	le.cancel()
 	<-le.done
+	slog.DebugContext(ctx, "state lock release", "id", le.info.ID)
 	return le.l.Release(ctx, le.info.ID)
 }

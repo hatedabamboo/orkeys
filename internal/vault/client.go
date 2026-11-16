@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"strings"
@@ -61,12 +62,15 @@ func NewFromEnv(ctx context.Context) (*Client, error) {
 		tr.TLSClientConfig = tlsCfg
 		c.http.Transport = tr
 	}
+	slog.DebugContext(ctx, "vault client", "addr", c.addr, "namespace", c.namespace, "tls_config", tlsCfg != nil)
 	if c.token != "" {
+		slog.DebugContext(ctx, "vault auth", "method", "token", "env", EnvToken)
 		return c, nil
 	}
 	switch {
 	case os.Getenv(EnvRoleID) != "":
 		mount := envOr(EnvAppRoleMount, "approle")
+		slog.DebugContext(ctx, "vault auth", "method", "approle", "mount", mount)
 		c.login = func(ctx context.Context) (string, error) {
 			return c.loginWith(ctx, mount, map[string]string{
 				"role_id":   os.Getenv(EnvRoleID),
@@ -75,6 +79,7 @@ func NewFromEnv(ctx context.Context) (*Client, error) {
 		}
 	case os.Getenv(EnvK8sRole) != "":
 		mount := envOr(EnvK8sMount, "kubernetes")
+		slog.DebugContext(ctx, "vault auth", "method", "kubernetes", "mount", mount, "role", os.Getenv(EnvK8sRole))
 		c.login = func(ctx context.Context) (string, error) {
 			jwt, err := os.ReadFile(saTokenPath)
 			if err != nil {
@@ -173,6 +178,7 @@ func (c *Client) do(ctx context.Context, method, apiPath string, in, out any) er
 	req := httpx.Request{Method: method, URL: c.addr + "/v1/" + apiPath, Header: c.header(tok), In: in, Out: out}
 	err := httpx.Do(ctx, c.http, req)
 	if httpx.StatusOf(err) == http.StatusForbidden && c.login != nil {
+		slog.DebugContext(ctx, "vault token refused; log in again", "path", apiPath)
 		tok, lerr := c.login(ctx)
 		if lerr != nil {
 			return errors.Join(err, lerr)
@@ -252,6 +258,7 @@ func (c *Client) Update(ctx context.Context, path string, fn func(map[string]any
 		}
 		_, err = c.WriteCAS(ctx, path, next, version)
 		if errors.Is(err, ErrCASMismatch) && i < casAttempts-1 {
+			slog.DebugContext(ctx, "vault check-and-set mismatch; read and write again", "path", path, "version", version, "attempt", i+1)
 			continue
 		}
 		return err

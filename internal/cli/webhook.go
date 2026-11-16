@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -46,12 +47,15 @@ func (h *webhook) post(ev engine.Event) error {
 			return fmt.Errorf("bad webhook URL")
 		}
 		req.Header.Set("Content-Type", "application/json")
+		start := time.Now()
 		resp, err := h.client.Do(req)
 		if err != nil {
+			slog.Debug("webhook post failed", "event", ev.Type, "key", ev.Key, "attempt", i+1, "duration", time.Since(start).Round(time.Millisecond))
 			last = fmt.Errorf("post event %s: request failed", ev.Type)
 			continue
 		}
 		_ = resp.Body.Close()
+		slog.Debug("webhook post", "event", ev.Type, "key", ev.Key, "attempt", i+1, "status", resp.StatusCode, "duration", time.Since(start).Round(time.Millisecond))
 		if resp.StatusCode < 300 {
 			return nil
 		}

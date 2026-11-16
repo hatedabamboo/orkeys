@@ -1,9 +1,12 @@
 package httpx
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 )
@@ -48,5 +51,31 @@ func TestErrorBodyAndStatus(t *testing.T) {
 	}
 	if StatusOf(nil) != 0 {
 		t.Fatal("StatusOf(nil)")
+	}
+}
+
+func TestDebugLogHidesQueryAndBody(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"key":"sk-response-value"}`))
+	}))
+	defer srv.Close()
+
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	defer slog.SetDefault(prev)
+
+	req := Request{Method: http.MethodPost, URL: srv.URL + "/keys?token=query-value", In: map[string]string{"key": "sk-request-value"}}
+	if err := Do(context.Background(), srv.Client(), req); err != nil {
+		t.Fatal(err)
+	}
+	got := buf.String()
+	if !strings.Contains(got, "status=200") || !strings.Contains(got, "/keys") {
+		t.Fatalf("no request record: %q", got)
+	}
+	for _, s := range []string{"query-value", "sk-request-value", "sk-response-value"} {
+		if strings.Contains(got, s) {
+			t.Errorf("debug log has %q: %q", s, got)
+		}
 	}
 }
