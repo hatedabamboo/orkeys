@@ -1,5 +1,14 @@
 # CHANGELOG
 
+## v0.4.5 (2026-11-16)
+
+- (feat) `--debug` (env `ORKEYS_DEBUG`) writes debug logs to stderr, for all commands. `--log-format json` writes them
+  as JSON records. Debug logs show URLs, secret paths, key names and key IDs. They do not show key values, tokens,
+  request and response bodies, URL queries or the `--events-webhook` URL
+- (feat) `github` consumer: `workflows` can list the same `workflow` more than once with another `ref` or other
+  `inputs`. Each entry starts one run. Two entries with the same `workflow`, `ref` and `inputs` are still an error.
+  An error of a start names its entry, for example `workflows[1]`
+
 ## v0.4.4 (2026-11-16)
 
 - (feat) `github` consumer: new field `workflows`, a list of `{workflow, ref, inputs}`. After each write of the
