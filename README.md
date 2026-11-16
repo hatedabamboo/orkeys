@@ -549,8 +549,10 @@ Limits:
 - orkeys does not start runs when you add `workflows` to a consumer that already holds the current key. The first
   runs come with the next write: a rotation, or a change of `secret`.
 - If one start fails, the retry starts all workflows of the consumer again, also the ones that started.
-- Two `github` consumers with the same workflow start two runs. One consumer cannot list the same `workflow` and
-  `ref` twice.
+- Two `github` consumers with the same workflow start two runs.
+- One consumer can list the same `workflow` more than once with another `ref` or other `inputs`. Each entry starts
+  one run. Two entries with the same `workflow`, `ref` and `inputs` are an error. An error of a start names its
+  entry: `workflows[1]`.
 
 Use `workflows` when a deploy workflow reads the secret and the service gets the key only from a deploy. After each
 write of the secret (create, import, rotation, reissue), orkeys starts a run of each workflow in the list:
@@ -564,6 +566,9 @@ consumers:
       - workflow: deploy.yml            # file in .github/workflows, or a workflow ID
         ref: main                       # branch or tag to run on; default: the default branch
         inputs: {environment: prod}     # workflow_dispatch inputs; optional
+      - workflow: deploy.yml            # same workflow again: a second run with other inputs
+        ref: main
+        inputs: {environment: canary}
       - workflow: smoke-test.yml        # runs on the default branch with no inputs
 ```
 

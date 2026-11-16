@@ -275,7 +275,7 @@ func (s *fakeStore) Read(_ context.Context, path string) (map[string]string, err
 type fakeGitHub struct {
 	secrets  map[string]string // GitHubSecret ID -> value
 	fail     error
-	runs     []string // "<repo>/<workflow>@<ref>" per started run
+	runs     []string // "<repo>/<workflow>@<ref> map[<inputs>]" per started run
 	failRuns error
 }
 
@@ -283,7 +283,11 @@ func (g *fakeGitHub) Dispatch(_ context.Context, w manifest.GitHubWorkflow) erro
 	if g.failRuns != nil {
 		return g.failRuns
 	}
-	g.runs = append(g.runs, w.String()+"@"+w.Ref)
+	run := w.String() + "@" + w.Ref
+	if len(w.Inputs) > 0 {
+		run += " " + fmt.Sprint(w.Inputs)
+	}
+	g.runs = append(g.runs, run)
 	return nil
 }
 

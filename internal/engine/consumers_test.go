@@ -118,13 +118,14 @@ func TestGitHubConsumerWorkflow(t *testing.T) {
     name: OPENROUTER_API_KEY
     workflows:
       - {workflow: deploy.yml, ref: main, inputs: {env: prod}}
+      - {workflow: deploy.yml, ref: main, inputs: {env: canary}}
       - workflow: smoke.yaml
   - {type: github, repo: acme/dialog, environment: prod, name: OPENROUTER_API_KEY}
 `)
 
 	// Create writes the secrets and starts the workflow once.
 	v.apply(t)
-	if want := []string{"acme/dialog/deploy.yml@main", "acme/dialog/smoke.yaml@"}; !slices.Equal(gh.runs, want) {
+	if want := []string{"acme/dialog/deploy.yml@main map[env:prod]", "acme/dialog/deploy.yml@main map[env:canary]", "acme/dialog/smoke.yaml@"}; !slices.Equal(gh.runs, want) {
 		t.Fatalf("runs after create: %v", gh.runs)
 	}
 
@@ -145,7 +146,7 @@ func TestGitHubConsumerWorkflow(t *testing.T) {
 	if err := v.rotate(t, RotateOptions{Retry: []string{prodKey}}); err != nil {
 		t.Fatal(err)
 	}
-	if len(gh.runs) != 4 {
+	if len(gh.runs) != 6 {
 		t.Fatalf("runs after retry: %v", gh.runs)
 	}
 	if st := v.store.states[prodKey]; st.Rotation != state.RotationIdle {

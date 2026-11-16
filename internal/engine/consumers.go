@@ -94,10 +94,11 @@ func (g GitHubPusher) Push(ctx context.Context, spec manifest.PushSpec, value st
 	if g.Workflows == nil {
 		return fmt.Errorf("github secret %s written; workflows not started: no workflow driver configured", c.Target())
 	}
+	// The index tells apart entries with the same workflow and other inputs.
 	var errs []error
-	for _, w := range runs {
+	for i, w := range runs {
 		if err := g.Workflows.Dispatch(ctx, w); err != nil {
-			errs = append(errs, fmt.Errorf("github secret %s written; workflow not started: %w", c.Target(), err))
+			errs = append(errs, fmt.Errorf("github secret %s written; workflow not started (workflows[%d]): %w", c.Target(), i, err))
 		}
 	}
 	return errors.Join(errs...)
