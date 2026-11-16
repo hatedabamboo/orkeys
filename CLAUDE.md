@@ -30,7 +30,7 @@ orkeys manages LLM provider API keys (OpenRouter, DeepInfra, OpenAI). It has two
 | `internal/provider/providertest` | Contract test that every provider adapter passes |
 | `internal/nullable` | Request fields that are absent, null or set |
 | `internal/openrouter`, `internal/deepinfra`, `internal/openai` | HTTP clients for the provider APIs |
-| `internal/httpx` | JSON over HTTP, retries GET on 429 and 5xx. All provider clients use it |
+| `internal/httpx` | JSON over HTTP. Retries reads on network errors, 408, 429 and 5xx, and writes on 429. All provider clients use it |
 | `internal/state`, `internal/secrets` | State store and secrets store interfaces; state lock, schema version, heartbeats, copy of `policy.yaml` |
 | `internal/vault`, `internal/s3store`, `internal/awssm`, `internal/backend` | Vault KV v2, S3, AWS Secrets Manager, and the factory that picks one |
 | `internal/kube` | `kubectl` calls: ExternalSecret force-sync, rollout restart |

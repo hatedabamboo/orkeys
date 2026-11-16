@@ -208,7 +208,12 @@ JSON output holds the full API objects. `create --json` includes the secret in `
 
 - `delete` asks for confirmation. Without a terminal it refuses to run unless you pass `--yes`.
 - `delete`, `enable` and `disable` take more than one key. `delete` finds all the keys before it deletes any.
-- GET requests retry on HTTP 429 and 5xx, and use `Retry-After`. Writes do not retry.
+- Writes (create, update, delete) retry only on HTTP 429. A timeout or a 5xx on a write can come after the provider
+  did the work, so orkeys does not send the write again.
+- Reads (GET) retry on network errors, HTTP 408, 429 and 5xx. Each request has up to 5 tries.
+- The wait before a retry comes from `Retry-After`, `x-ratelimit-reset-requests` (OpenAI) or `X-RateLimit-Reset`
+  (OpenRouter). Without these headers, the wait starts at 5 seconds for 429 and 1 second for other errors, and
+  doubles at each retry. One wait is at most 60 seconds. Each retry writes a `WARN` log record to stderr.
 - Exit code is `0` on success and `1` on any error.
 
 ### Debug logs
@@ -1014,7 +1019,7 @@ Layout:
 | `internal/openrouter` | HTTP client for the OpenRouter Management API |
 | `internal/deepinfra` | HTTP client for DeepInfra API tokens and key limits |
 | `internal/openai` | HTTP client for the OpenAI Admin API: project keys, service accounts, costs |
-| `internal/httpx` | JSON over HTTP with retries for GET |
+| `internal/httpx` | JSON over HTTP with retries: reads on network errors, 408, 429 and 5xx; writes on 429 |
 | `internal/nullable` | request fields that are absent, null or set |
 | `internal/provider` | common interface, optional `Limiter` and `Disabler`, and registry of the providers |
 | `internal/provider/providertest` | contract test that every provider adapter passes |

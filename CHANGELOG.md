@@ -1,5 +1,16 @@
 # CHANGELOG
 
+## v0.4.6 (2026-11-16)
+
+- (change) Provider and Vault writes retry on HTTP 429. The server rejects a rate-limited request before it
+  does the work. Writes do not retry on other errors
+- (fix) Reads retry on network errors and HTTP 408, for example the OpenRouter error `Operation timed out after 10s`
+  on `list keys`. Reads have up to 5 tries
+- (fix) A retry after HTTP 429 waits longer: orkeys reads `Retry-After`, `x-ratelimit-reset-requests` (OpenAI) and
+  `X-RateLimit-Reset` (OpenRouter). Without these headers, the wait starts at 5 seconds and doubles at each retry, up
+  to 60 seconds. This fixes the OpenAI error `list keys: costs: HTTP 429` (30 requests per minute). Each retry writes
+  a `WARN` log record to stderr
+
 ## v0.4.5 (2026-11-16)
 
 - (feat) `--debug` (env `ORKEYS_DEBUG`) writes debug logs to stderr, for all commands. `--log-format json` writes them
