@@ -181,18 +181,43 @@ type DirectConsumer struct {
 func (c *DirectConsumer) Validate(add func(string, ...any)) { c.validate(add) }
 
 // GitHubConsumer is a GitHub Actions secret: Repo or Org, an optional Environment (repo only), and Name.
+// With Workflows (repo only), orkeys runs these workflows in Repo after each write of the secret.
 type GitHubConsumer struct {
-	Repo        string `yaml:"repo,omitempty"`
-	Org         string `yaml:"org,omitempty"`
-	Environment string `yaml:"environment,omitempty"`
-	Name        string `yaml:"name"`
-	Visibility  string `yaml:"visibility,omitempty"`
+	Repo        string               `yaml:"repo,omitempty"`
+	Org         string               `yaml:"org,omitempty"`
+	Environment string               `yaml:"environment,omitempty"`
+	Name        string               `yaml:"name"`
+	Visibility  string               `yaml:"visibility,omitempty"`
+	Workflows   []GitHubWorkflowSpec `yaml:"workflows,omitempty"`
+}
+
+// GitHubWorkflowSpec is one entry of workflows in a github consumer. An empty Ref is the default branch.
+type GitHubWorkflowSpec struct {
+	Workflow string            `yaml:"workflow"`
+	Ref      string            `yaml:"ref,omitempty"`
+	Inputs   map[string]string `yaml:"inputs,omitempty"`
+}
+
+// UnmarshalYAML decodes an entry. A field that the entry does not have is an error.
+func (w *GitHubWorkflowSpec) UnmarshalYAML(n *yaml.Node) error {
+	if n.Kind != yaml.MappingNode {
+		return fmt.Errorf("line %d: workflows: want a mapping, for example {workflow: deploy.yml}", n.Line)
+	}
+	known := yamlFields(w)
+	for i := 0; i < len(n.Content); i += 2 {
+		if k := n.Content[i]; !slices.Contains(known, k.Value) {
+			return fmt.Errorf("line %d: workflows has no field %s (known: %s)", k.Line, k.Value, strings.Join(known, ", "))
+		}
+	}
+	type plain GitHubWorkflowSpec
+	return n.Decode((*plain)(w))
 }
 
 var (
 	githubSecretName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 	githubRepo       = regexp.MustCompile(`^[A-Za-z0-9-]+/[A-Za-z0-9._-]+$`)
 	githubOrg        = regexp.MustCompile(`^[A-Za-z0-9-]+$`)
+	githubWorkflow   = regexp.MustCompile(`^([0-9]+|[A-Za-z0-9._-]+\.ya?ml)$`)
 )
 
 // Validate checks the fields.
@@ -224,6 +249,30 @@ func (c *GitHubConsumer) Validate(add func(string, ...any)) {
 			add(".visibility: want all or private")
 		}
 	}
+	c.validateWorkflow(add)
+}
+
+func (c *GitHubConsumer) validateWorkflow(add func(string, ...any)) {
+	if len(c.Workflows) > 0 && c.Repo == "" {
+		add(".workflows: only with repo")
+	}
+	seen := map[string]int{}
+	for i, w := range c.Workflows {
+		switch {
+		case w.Workflow == "":
+			add(".workflows[%d].workflow: required", i)
+		case !githubWorkflow.MatchString(w.Workflow):
+			add(".workflows[%d].workflow: %q is not a workflow file name in .github/workflows (deploy.yml) or a workflow ID", i, w.Workflow)
+		}
+		if w.Ref != "" && (strings.ContainsAny(w.Ref, " ~^:?*[\\") || strings.HasPrefix(w.Ref, "-")) {
+			add(".workflows[%d].ref: %q is not a branch or tag name", i, w.Ref)
+		}
+		id := w.Workflow + "@" + w.Ref
+		if j, dup := seen[id]; dup {
+			add(".workflows[%d]: same workflow and ref as workflows[%d]", i, j)
+		}
+		seen[id] = i
+	}
 }
 
 // Target returns the GitHub secret of the consumer.
@@ -240,6 +289,25 @@ func (c *GitHubConsumer) Target() GitHubSecret {
 
 // TargetID returns the ID of the GitHub secret.
 func (c *GitHubConsumer) TargetID() string { return c.Target().ID() }
+
+// Runs returns the workflows to run after a write.
+func (c *GitHubConsumer) Runs() []GitHubWorkflow {
+	out := make([]GitHubWorkflow, len(c.Workflows))
+	for i, w := range c.Workflows {
+		out[i] = GitHubWorkflow{Repo: c.Repo, Workflow: w.Workflow, Ref: w.Ref, Inputs: w.Inputs}
+	}
+	return out
+}
+
+// GitHubWorkflow is a workflow_dispatch run. An empty Ref is the default branch of Repo.
+type GitHubWorkflow struct {
+	Repo     string
+	Workflow string
+	Ref      string
+	Inputs   map[string]string
+}
+
+func (w GitHubWorkflow) String() string { return w.Repo + "/" + w.Workflow }
 
 // GitHubSecret is one GitHub Actions secret that orkeys writes. Set Org, or Repo (owner/name) with an
 // optional Environment.

@@ -1,5 +1,11 @@
 # CHANGELOG
 
+## v0.4.4 (2026-11-16)
+
+- (feat) `github` consumer: new field `workflows`, a list of `{workflow, ref, inputs}`. After each write of the
+  secret, orkeys starts a `workflow_dispatch` run of each workflow in `repo`. A failed start fails the rotation; run
+  `orkeys rotate --retry <key>`. The token needs "Actions: read and write" on the repository
+
 ## v0.4.3 (2026-11-13)
 
 - (feat) `apply` saves a copy of `policy.yaml` in the state store (`.policy`) when the file changed, also when the
