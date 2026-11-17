@@ -29,6 +29,12 @@ const (
 	EventExpiryNotice        = "expiry_notice"
 	EventConsumersSynced     = "consumers_synced"
 	EventConsumersSyncFailed = "consumers_sync_failed"
+	// EventKeyExpired: a void key is past its expiry. rotate repeats it once a day until orkeys put.
+	EventKeyExpired = "key_expired"
+	// EventValueMissing: a void key with a secret has no value yet. rotate repeats it once a day until orkeys put.
+	EventValueMissing = "value_missing"
+	// EventRevokeByHand: orkeys does not use an old void key any more. A person must revoke it at the vendor.
+	EventRevokeByHand = "revoke_by_hand"
 )
 
 type Event struct {

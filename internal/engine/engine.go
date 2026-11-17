@@ -136,6 +136,10 @@ func (e *Engine) stateFor(k *manifest.Key) *state.State {
 		TrackOnly:  k.TrackOnly(),
 		Disabled:   k.Disabled,
 	}
+	if e.Inv.Policy.Manual(k.Provider) {
+		// A void key has no limit, so there is no reset period.
+		st.LimitReset = ""
+	}
 	for _, sec := range k.SecretTargets() {
 		st.Secrets = append(st.Secrets, state.SecretRef{Path: sec.Path, Field: sec.Field})
 	}
@@ -347,8 +351,9 @@ func (e *Engine) writeSecrets(ctx context.Context, k *manifest.Key, refs []state
 		return errors.Join(errs...)
 	}
 	for _, r := range refs {
+		// A missing secret is not an error: the first write creates it, and restore deletes the field again.
 		data, err := e.Secrets.Read(ctx, r.Path)
-		if err != nil {
+		if err != nil && !errors.Is(err, secrets.ErrNotFound) {
 			return restore(fmt.Errorf("read secret %s: %w", r, err))
 		}
 		if err := e.Secrets.Put(ctx, r.Path, r.Field, value, secretMeta(k, keyID)); err != nil {

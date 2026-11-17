@@ -39,6 +39,10 @@ providers:                                    # provider accounts; manifests use
   - name: deepinfra
     kind: deepinfra
     management_key: secret/orkeys/providers/deepinfra    # read only, see README
+  - name: elevenlabs
+    kind: void                                # no API; a person makes keys, orkeys put delivers them
+    options:
+      console: https://elevenlabs.io/app/settings/api-keys   # link in the reminders
 
 clusters:
   prod-eu:                                    # cluster name used in consumers

@@ -13,9 +13,9 @@ orkeys manages LLM provider API keys (OpenRouter, DeepInfra, OpenAI). It has two
 
 - Do not run `git commit`, `git push`, `git rebase` or `git tag` unless the user tells you to.
 - Do not add yourself as a co-author of a commit.
-- Do not run `orkeys apply`, `orkeys rotate`, `orkeys hygiene` (without `--dry-run`), `orkeys request` or
-  `orkeys unlock <id>` against real credentials. They create, change and revoke real keys. `validate` and `plan` are
-  safe.
+- Do not run `orkeys apply`, `orkeys rotate`, `orkeys hygiene` (without `--dry-run`), `orkeys request`,
+  `orkeys put` or `orkeys unlock <id>` against real credentials. They create, change and revoke real keys.
+  `validate` and `plan` are safe.
 - Do not put API keys, management keys or tokens in files, tests, examples or command output.
 
 ## Repository structure
@@ -23,10 +23,10 @@ orkeys manages LLM provider API keys (OpenRouter, DeepInfra, OpenAI). It has two
 | Path | Contents |
 |---|---|
 | `main.go` | Entry point. Sets `main.version` from ldflags |
-| `internal/cli` | Cobra commands: `openrouter.go`, `deepinfra.go`, `openai.go`, `keys.go` (any provider), `inventory.go`, `exporter_cmd.go`. Wiring in `wire.go`, output in `render.go` and `output.go`, event webhook in `webhook.go`, log setup in `logging.go` |
-| `internal/engine` | Inventory logic: `plan.go`, `apply.go`, `rotate.go`, `request.go`, `revoke.go`, `tracked.go`, `hygiene.go`, `import.go`, `teams.go`, `consumers.go` (consumer drivers), `recover.go` (interrupted issues, secret drift), `event.go`. Test fakes in `fakes_test.go` |
+| `internal/cli` | Cobra commands: `openrouter.go`, `deepinfra.go`, `openai.go`, `keys.go` (any provider), `inventory.go`, `put.go`, `exporter_cmd.go`. Wiring in `wire.go`, output in `render.go` and `output.go`, event webhook in `webhook.go`, log setup in `logging.go` |
+| `internal/engine` | Inventory logic: `plan.go`, `apply.go`, `rotate.go`, `request.go`, `revoke.go`, `tracked.go`, `hygiene.go`, `import.go`, `teams.go`, `consumers.go` (consumer drivers), `recover.go` (interrupted issues, secret drift), `void.go` (keys without an API, `put`), `event.go`. Test fakes in `fakes_test.go` |
 | `internal/manifest` | Load and validate `policy.yaml`, `team.yaml` and key manifests. Types in `types.go`, consumer types in `consumer.go`. Test repo in `testdata/repo` |
-| `internal/provider` | Common provider interface, optional `Limiter` and `Disabler`, and registry; OpenRouter, DeepInfra and OpenAI adapters. Contract tests in `conformance_test.go` |
+| `internal/provider` | Common provider interface, optional `Limiter` and `Disabler`, and registry; OpenRouter, DeepInfra and OpenAI adapters, and `void` (no API). Contract tests in `conformance_test.go` |
 | `internal/provider/providertest` | Contract test that every provider adapter passes |
 | `internal/nullable` | Request fields that are absent, null or set |
 | `internal/openrouter`, `internal/deepinfra`, `internal/openai` | HTTP clients for the provider APIs |
@@ -139,6 +139,9 @@ Ask the user for facts you cannot find: the team, the env, the provider, the lim
 - `secret.path` is where orkeys writes the key. `secret.field` defaults to `api_key`. `secret` can be a list to write
   the same key to more than one place.
 - `consumers` lists what reads the key. `restart` lists only workloads that must restart to read the new key.
+- A `void` provider has no API. Its keys allow no `budget`, `import` or `track_only`. `secret` is optional;
+  `consumers` need a `secret`. A person makes the key at the vendor, writes it to the secret and changes `issued`
+  (`YYYY-MM-DD`) in the manifest, or runs `orkeys put <name>`. Never write the value yourself.
 - `track_only: true` (on the key, or in the provider `options`) needs `import` and a monthly `budget.reset`, and
   allows no `secret`, `consumers` or `disabled`. Use it for keys that orkeys must not change, for example DeepInfra
   keys. Read the provider `options` in `policy.yaml`: a key without `track_only` uses the provider value.
@@ -186,6 +189,9 @@ Tell the user what `apply` will do before they merge. These changes have effects
 | `import: {id, name}` | Adopts an existing provider key. The user must first write its value to `secret.path` |
 | `import` with `track_only: true` | Saves only the state. orkeys exports metrics and does not change the key |
 | Delete the file of a tracked key | Removes only the state. The key stays at the provider |
+| New file of a `void` key | Saves the state. Adopts the value in `secret` if it is set, else waits for a value |
+| Change `issued` of a `void` key | A new value in the secret: adopts it, and the consumers sync at the next `rotate`. The same value: changes only the dates. Check the `plan` detail: "same value" means that the user did not write the new key |
+| Delete the file of a `void` key | Deletes the secret fields, the GitHub secrets and the state. A person must revoke the key at the vendor |
 
 ### After you write a manifest
 

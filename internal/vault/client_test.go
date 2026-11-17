@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hatedabamboo/orkeys/internal/secrets"
 	"github.com/hatedabamboo/orkeys/internal/state"
 )
 
@@ -120,6 +121,9 @@ func TestStore(t *testing.T) {
 	}
 	if m, err := sec.Meta(ctx, "kv/app/x", "api_key"); err != nil || m["orkeys-key"] != "prod-a-b" {
 		t.Fatalf("meta: %v %v", m, err)
+	}
+	if _, err := sec.Read(ctx, "kv/app/none"); !errors.Is(err, secrets.ErrNotFound) {
+		t.Fatalf("read of a missing secret: %v", err)
 	}
 	if m, err := sec.Meta(ctx, "kv/app/none", "api_key"); err != nil || m != nil {
 		t.Fatalf("meta of a missing secret: %v %v", m, err)

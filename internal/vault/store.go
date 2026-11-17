@@ -206,7 +206,7 @@ func (s *SecretStore) Read(ctx context.Context, path string) (map[string]string,
 		return nil, err
 	}
 	if data == nil {
-		return nil, fmt.Errorf("vault %s: not found", path)
+		return nil, fmt.Errorf("vault %s: %w", path, secrets.ErrNotFound)
 	}
 	out := make(map[string]string, len(data))
 	for k, v := range data {

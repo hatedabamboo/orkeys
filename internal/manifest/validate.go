@@ -69,6 +69,9 @@ func (inv *Inventory) Validate() []Problem {
 				add("policy.yaml", "providers.%s.options.%s: unknown option for %s (known: %s)", name, opt, pc.Kind, known)
 			}
 		}
+		if info.Caps.Manual {
+			validateVoidProvider(name, pc, add)
+		}
 		seen := map[string]bool{}
 		for i, id := range pc.Options.IgnoreUnmanaged {
 			switch {
@@ -163,17 +166,14 @@ func (inv *Inventory) Validate() []Problem {
 		case kp.Source != SourceManifest:
 			add(p, "kind: %s keys are issued with orkeys request, not with manifests", k.Kind)
 		}
-		if k.Budget.Limit <= 0 {
-			add(p, "budget.limit: must be more than 0 (or set kinds.%s.budget.limit)", k.Kind)
-		}
-		if kp != nil && kp.MaxLimit > 0 && k.Budget.Limit > kp.MaxLimit {
-			add(p, "budget.limit: more than kinds.%s.max_limit %g", k.Kind, kp.MaxLimit)
-		}
-		if k.Budget.Reset != "" && !slices.Contains(resets, k.Budget.Reset) {
-			add(p, "budget.reset: want daily, weekly or monthly")
-		}
-		if info, ok := provider.Lookup(pol.ProviderKind(k.Provider)); ok && !info.Caps.LimitReset && k.Budget.Reset != "" && k.Budget.Reset != DefaultReset {
-			add(p, "budget.reset: %s supports only monthly limits", k.Provider)
+		manual := pol.Manual(k.Provider)
+		if manual {
+			validateVoid(k, add)
+		} else {
+			validateBudget(pol, k, kp, add)
+			if !k.Issued.IsZero() {
+				add(p, "issued: only for void providers; orkeys knows the creation time of %s keys", k.Provider)
+			}
 		}
 		if kp != nil && !kp.AllowsProvider(k.Provider) {
 			add(p, "provider: %s keys allow only %s", k.Kind, strings.Join(kp.Providers, ", "))
@@ -191,7 +191,7 @@ func (inv *Inventory) Validate() []Problem {
 			}
 		}
 		if info, ok := provider.Lookup(pol.ProviderKind(k.Provider)); ok {
-			if k.Disabled && !info.Caps.Disable {
+			if k.Disabled && !info.Caps.Disable && !manual {
 				add(p, "disabled: %s keys cannot be disabled; delete the manifest to revoke the key", k.Provider)
 			}
 			if info.Caps.MaxExpiry > 0 && k.TTL.Duration > info.Caps.MaxExpiry {
@@ -252,6 +252,9 @@ func validateKind(pol *Policy, name string, add func(string, string, ...any)) {
 		if _, ok := pol.Providers[p]; !ok {
 			add("policy.yaml", "%s.providers: %q is not in providers", at, p)
 		}
+		if kp.Source == SourceRequest && pol.Manual(p) {
+			add("policy.yaml", "%s.providers: %s is a void provider; orkeys request cannot make its keys", at, p)
+		}
 	}
 	switch kp.Source {
 	case SourceManifest:
@@ -288,7 +291,7 @@ func validateManifestKey(inv *Inventory, k *Key, kp *KindPolicy, add func(string
 			add(p, "ttl: must be longer than kinds.%s.rotate_before", k.Kind)
 		}
 	}
-	if len(k.Secrets) == 0 && !k.TrackOnly() {
+	if len(k.Secrets) == 0 && !k.TrackOnly() && !pol.Manual(k.Provider) {
 		add(p, "secret.path: required")
 	}
 	own := map[string]bool{}
@@ -371,5 +374,53 @@ func validateTracked(k *Key, add func(string, string, ...any)) {
 	}
 	if k.Budget.ResetOrDefault() != DefaultReset {
 		add(p, "budget.reset: track_only: true allows only monthly")
+	}
+}
+
+func validateBudget(pol *Policy, k *Key, kp *KindPolicy, add func(string, string, ...any)) {
+	p := k.Path
+	if k.Budget.Limit <= 0 {
+		add(p, "budget.limit: must be more than 0 (or set kinds.%s.budget.limit)", k.Kind)
+	}
+	if kp != nil && kp.MaxLimit > 0 && k.Budget.Limit > kp.MaxLimit {
+		add(p, "budget.limit: more than kinds.%s.max_limit %g", k.Kind, kp.MaxLimit)
+	}
+	if k.Budget.Reset != "" && !slices.Contains(resets, k.Budget.Reset) {
+		add(p, "budget.reset: want daily, weekly or monthly")
+	}
+	if info, ok := provider.Lookup(pol.ProviderKind(k.Provider)); ok && !info.Caps.LimitReset && k.Budget.Reset != "" && k.Budget.Reset != DefaultReset {
+		add(p, "budget.reset: %s supports only monthly limits", k.Provider)
+	}
+}
+
+// validateVoidProvider checks a provider of type void. It has no API, so the connection fields have no use.
+func validateVoidProvider(name string, pc ProviderConfig, add func(string, string, ...any)) {
+	if pc.ManagementKey != "" || pc.Workspace != "" || pc.BaseURL != "" {
+		add("policy.yaml", "providers.%s: management_key, workspace and base_url are not used by void providers", name)
+	}
+	if pc.Options.TrackOnly {
+		add("policy.yaml", "providers.%s.options.%s: not allowed for void providers", name, OptTrackOnly)
+	}
+}
+
+// validateVoid checks a key of a void provider. orkeys has no spend data and no provider key to import.
+// The consumers read the value from the secrets store, so they need a secret.
+func validateVoid(k *Key, add func(string, string, ...any)) {
+	p := k.Path
+	if k.Budget != (Budget{}) {
+		add(p, "budget: not allowed for void provider %s; orkeys has no spend data", k.Provider)
+	}
+	if k.Import != nil {
+		add(p, "import: not allowed for void provider %s; write the current key with orkeys put", k.Provider)
+	}
+	if k.TrackOnly() {
+		add(p, "track_only: not allowed for void provider %s", k.Provider)
+	}
+	if len(k.Consumers) > 0 && len(k.Secrets) == 0 {
+		add(p, "consumers: need secret; orkeys reads the key from the secrets store to deliver it")
+	}
+	// One day of slack: a person east of UTC can write the local date.
+	if k.Issued.After(time.Now().Add(24 * time.Hour)) {
+		add(p, "issued: %s is in the future", k.Issued)
 	}
 }

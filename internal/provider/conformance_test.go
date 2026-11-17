@@ -2,6 +2,7 @@ package provider_test
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -225,5 +226,25 @@ func (f *memOpenAI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		f.keys = kept
 	default:
 		w.WriteHeader(http.StatusNotFound)
+	}
+}
+
+func TestVoid(t *testing.T) {
+	p, err := provider.New("void", provider.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := t.Context()
+	if keys, err := p.List(ctx); err != nil || len(keys) != 0 {
+		t.Fatalf("list: %v %v", keys, err)
+	}
+	if _, _, err := p.Create(ctx, provider.Spec{Name: "x"}); !errors.Is(err, provider.ErrManual) {
+		t.Fatalf("create: %v", err)
+	}
+	if err := p.Delete(ctx, "x"); !errors.Is(err, provider.ErrManual) {
+		t.Fatalf("delete: %v", err)
+	}
+	if _, err := provider.AsLimiter(p); err == nil {
+		t.Fatal("void has no limiter")
 	}
 }

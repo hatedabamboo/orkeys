@@ -148,6 +148,10 @@ func TestProviderFromSecrets(t *testing.T) {
 	if _, err := providerFromSecrets(ctx, sec, "openrouter-x", manifest.ProviderConfig{ManagementKey: "missing"}, time.Second); err == nil || !strings.Contains(err.Error(), "ORKEYS_OPENROUTER_X_KEY") {
 		t.Fatalf("env var name with dash: %v", err)
 	}
+	// A void provider has no management key. It needs no secrets store.
+	if p, err := providerFromSecrets(ctx, nil, "tts", manifest.ProviderConfig{Kind: "void"}, time.Second); err != nil || !p.Caps().Manual {
+		t.Fatalf("void provider: %v", err)
+	}
 }
 
 func TestResolveExporterConfig(t *testing.T) {

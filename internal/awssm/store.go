@@ -218,7 +218,7 @@ func (s *SecretStore) Read(ctx context.Context, name string) (map[string]string,
 		return nil, err
 	}
 	if st != secretExists {
-		return nil, fmt.Errorf("secretsmanager %s: not found", name)
+		return nil, fmt.Errorf("secretsmanager %s: %w", name, secrets.ErrNotFound)
 	}
 	return data, nil
 }

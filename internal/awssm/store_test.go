@@ -2,12 +2,15 @@ package awssm
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/secretsmanager"
 	"github.com/aws/aws-sdk-go-v2/service/secretsmanager/types"
+
+	"github.com/hatedabamboo/orkeys/internal/secrets"
 )
 
 type fakeSM struct {
@@ -114,8 +117,8 @@ func TestSecretStore(t *testing.T) {
 	if err != nil || got["other"] != "keep" || got["api_key"] != "sk2" || f.tags["app/x"]["orkeys-key.api_key"] != "prod-c-d" {
 		t.Fatalf("update: %v %v %v", got, err, f.tags)
 	}
-	if _, err := s.Read(ctx, "missing"); err == nil {
-		t.Fatal("want not found")
+	if _, err := s.Read(ctx, "missing"); !errors.Is(err, secrets.ErrNotFound) {
+		t.Fatalf("want not found: %v", err)
 	}
 	if err := s.DeleteField(ctx, "app/x", "api_key"); err != nil || f.values["app/x"] != `{"other":"keep"}` {
 		t.Fatalf("delete field must keep other fields: %v %v", err, f.values)
@@ -143,8 +146,8 @@ func TestPutRestoresSecretScheduledForDeletion(t *testing.T) {
 	if err := s.DeleteField(ctx, "app/x", "api_key"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Read(ctx, "app/x"); err == nil {
-		t.Fatal("a secret scheduled for deletion must read as not found")
+	if _, err := s.Read(ctx, "app/x"); !errors.Is(err, secrets.ErrNotFound) {
+		t.Fatalf("a secret scheduled for deletion must read as not found: %v", err)
 	}
 	if m, err := s.Meta(ctx, "app/x", "api_key"); err != nil || m != nil {
 		t.Fatalf("meta of a deleted secret: %v %v", m, err)

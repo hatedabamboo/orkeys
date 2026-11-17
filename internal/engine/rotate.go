@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/hatedabamboo/orkeys/internal/manifest"
 	"github.com/hatedabamboo/orkeys/internal/provider"
 	"github.com/hatedabamboo/orkeys/internal/state"
 )
@@ -79,6 +80,9 @@ func (e *Engine) rotateOne(ctx context.Context, st *state.State, keys []provider
 	case kp == nil:
 		return fmt.Errorf("kind %q is not in policy.yaml kinds", st.Kind)
 
+	case e.manual(st.Provider):
+		return e.rotateVoid(ctx, st, kp, retry, force)
+
 	default:
 		k := e.Inv.Key(st.Name)
 		if k == nil {
@@ -126,29 +130,13 @@ func (e *Engine) rotateOne(ctx context.Context, st *state.State, keys []provider
 			changed = false
 		}
 		if st.Rotation == state.RotationPending {
-			e.debug(ctx, "rotate: sync consumers", "key", st.Name, "key_id", short(st.KeyID), "consumers", len(k.Consumers))
-			if err := e.syncConsumers(ctx, k, st); err != nil {
-				if ctx.Err() != nil {
-					// A stopped run is not a failed sync. The next run syncs the consumers again.
-					return errors.Join(err, e.putState(ctx, st))
-				}
-				st.Rotation, st.RotationError = state.RotationFailed, err.Error()
-				e.emit(st, LevelAlert, EventRotationFailed, "rotation failed: %v; the old key stays active; after the fix run: orkeys rotate --retry %s", err, st.Name)
-				return e.putState(ctx, st)
+			ids, ok, err := e.syncPending(ctx, k, st, kp, now)
+			if !ok {
+				return err
 			}
-			grace := kp.RevokeGrace.Duration
-			var ids []string
-			for i := range st.PendingRevokes {
-				if st.PendingRevokes[i].After.IsZero() {
-					st.PendingRevokes[i].After = now.Add(grace)
-					st.PendingRevokes[i].CheckFrom = now.Add(drain)
-					ids = append(ids, short(st.PendingRevokes[i].KeyID))
-				}
-			}
-			st.Rotation = state.RotationIdle
 			changed = true
 			e.emit(st, LevelInfo, EventRotationSynced, "consumers use the new key; old key %s will be revoked after %s",
-				strings.Join(ids, ", "), now.Add(grace).Format("2006-01-02 15:04 UTC"))
+				strings.Join(ids, ", "), now.Add(kp.RevokeGrace.Duration).Format("2006-01-02 15:04 UTC"))
 		}
 	}
 
@@ -164,6 +152,30 @@ func (e *Engine) rotateOne(ctx context.Context, st *state.State, keys []provider
 	}
 	e.debug(ctx, "rotate: no change", "key", st.Name)
 	return nil
+}
+
+// syncPending syncs the consumers of a pending rotation. On success, it starts the grace time of the old keys,
+// sets the rotation to idle and returns the short IDs of the old keys. On failure, it saves st and returns ok false.
+func (e *Engine) syncPending(ctx context.Context, k *manifest.Key, st *state.State, kp *manifest.KindPolicy, now time.Time) (ids []string, ok bool, err error) {
+	e.debug(ctx, "rotate: sync consumers", "key", st.Name, "key_id", short(st.KeyID), "consumers", len(k.Consumers))
+	if err := e.syncConsumers(ctx, k, st); err != nil {
+		if ctx.Err() != nil {
+			// A stopped run is not a failed sync. The next run syncs the consumers again.
+			return nil, false, errors.Join(err, e.putState(ctx, st))
+		}
+		st.Rotation, st.RotationError = state.RotationFailed, err.Error()
+		e.emit(st, LevelAlert, EventRotationFailed, "rotation failed: %v; the old key stays active; after the fix run: orkeys rotate --retry %s", err, st.Name)
+		return nil, false, e.putState(ctx, st)
+	}
+	for i := range st.PendingRevokes {
+		if st.PendingRevokes[i].After.IsZero() {
+			st.PendingRevokes[i].After = now.Add(kp.RevokeGrace.Duration)
+			st.PendingRevokes[i].CheckFrom = now.Add(drain)
+			ids = append(ids, short(st.PendingRevokes[i].KeyID))
+		}
+	}
+	st.Rotation = state.RotationIdle
+	return ids, true, nil
 }
 
 // fmtUSD formats a spend for logs. Nil is "unknown": the provider reports no spend.
