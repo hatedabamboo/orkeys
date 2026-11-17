@@ -292,6 +292,76 @@ func TestOldKeyStillUsed(t *testing.T) {
 	}
 }
 
+// oldKeyInUseThenRetry fails a rotation with old_key_in_use ($1.5 after the switch), runs rotate --retry and records
+// the new baseline. The old key usage stays at $1.5.
+func oldKeyInUseThenRetry(t *testing.T) (*env, string) {
+	t.Helper()
+	v := setup(t)
+	v.apply(t)
+	oldID := v.store.states[prodKey].KeyID
+	v.clk.add(days(84))
+	_ = v.rotate(t, RotateOptions{})
+	v.clk.add(time.Hour)
+	_ = v.rotate(t, RotateOptions{})
+	used := 1.5
+	v.or.find(oldID).UsageUSD = &used
+	v.clk.add(24 * time.Hour)
+	_ = v.rotate(t, RotateOptions{})
+	if v.or.find(oldID) == nil || v.store.states[prodKey].Rotation != state.RotationFailed || !hasAlert(v.events, EventOldKeyInUse, prodKey, "#chat-core-alerts") {
+		t.Fatal("old key in use must not be revoked")
+	}
+
+	if err := v.rotate(t, RotateOptions{Retry: []string{prodKey}}); err != nil {
+		t.Fatal(err)
+	}
+	if prs := v.store.states[prodKey].PendingRevokes; len(prs) != 1 || prs[0].Baseline != nil {
+		t.Fatalf("retry must clear the baseline: %+v", prs)
+	}
+	v.clk.add(time.Hour)
+	_ = v.rotate(t, RotateOptions{})
+	if b := v.store.states[prodKey].PendingRevokes[0].Baseline; b == nil || *b != 1.5 {
+		t.Fatalf("new baseline not recorded: %+v", v.store.states[prodKey].PendingRevokes)
+	}
+	return v, oldID
+}
+
+func countEvents(l *EventLog, typ, key string) int {
+	n := 0
+	for _, e := range l.Events {
+		if e.Type == typ && e.Key == key {
+			n++
+		}
+	}
+	return n
+}
+
+func TestRetryAfterOldKeyInUseTakesNewBaseline(t *testing.T) {
+	v, oldID := oldKeyInUseThenRetry(t)
+	inUse := countEvents(v.events, EventOldKeyInUse, prodKey)
+	v.clk.add(24 * time.Hour)
+	if err := v.rotate(t, RotateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if v.or.find(oldID) != nil || len(v.store.states[prodKey].PendingRevokes) != 0 {
+		t.Fatalf("old key not revoked after retry: %+v", v.store.states[prodKey])
+	}
+	if countEvents(v.events, EventOldKeyRevoked, prodKey) != 1 || countEvents(v.events, EventOldKeyInUse, prodKey) != inUse {
+		t.Fatalf("want old_key_revoked and no new old_key_in_use: %v", v.events.Events)
+	}
+}
+
+func TestRetryAfterOldKeyInUseCountsNewSpend(t *testing.T) {
+	v, oldID := oldKeyInUseThenRetry(t)
+	used := 2.0
+	v.or.find(oldID).UsageUSD = &used
+	v.clk.add(24 * time.Hour)
+	_ = v.rotate(t, RotateOptions{})
+	st := v.store.states[prodKey]
+	if v.or.find(oldID) == nil || st.Rotation != state.RotationFailed || !strings.Contains(st.RotationError, "$0.5000 spent after the switch") {
+		t.Fatalf("want failed rotation for spend after the retry: %+v", st)
+	}
+}
+
 func TestRevokeWaitsForBaseline(t *testing.T) {
 	v := setup(t)
 	v.apply(t)

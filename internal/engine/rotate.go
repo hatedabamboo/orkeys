@@ -94,9 +94,12 @@ func (e *Engine) rotateOne(ctx context.Context, st *state.State, keys []provider
 		}
 		if retry && st.Rotation == state.RotationFailed {
 			st.Rotation, st.RotationError = state.RotationPending, ""
+			// The retry says that the consumers are fixed. Only spend after the retry sync counts.
+			// The old baseline stays below the usage forever: OpenRouter reports lifetime usage.
 			for i := range st.PendingRevokes {
 				if st.PendingRevokes[i].Source == state.RevokeRotation {
 					st.PendingRevokes[i].After = time.Time{}
+					st.PendingRevokes[i].Baseline = nil
 				}
 			}
 			changed = true

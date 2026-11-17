@@ -1,5 +1,10 @@
 # CHANGELOG
 
+## v0.4.7 (2026-11-17)
+
+- (fix) `rotate --retry` takes a new usage baseline of the old key. Before, the check after a retry counted the spend
+  from before the retry, and the rotation failed again with the same `old_key_in_use` amount [be51228](https://github.com/hatedabamboo/orkeys/commit/be51228091ba507973a6549dfda3fc592151c1ae)
+
 ## v0.4.6 (2026-11-16)
 
 - (change) Provider and Vault writes retry on HTTP 429. The server rejects a rate-limited request before it

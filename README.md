@@ -905,7 +905,8 @@ races with a takeover of an expired lock can remove the new holder's lock.
    orkeys records a new baseline and decides on the next run. If no run recorded the usage in between, the run at
    revoke time records it and the next run revokes. Run `rotate` hourly.
 4. A failed rotation sends an alert and stops. Fix the cause, then run `orkeys rotate --retry <key>`. The old key stays
-   active until then.
+   active until then. `--retry` syncs the consumers again and starts a new wait: the usage check of step 3 records a
+   new baseline. Only spend after the retry counts.
 
 OpenRouter and OpenAI keys also get a native expiry at `ttl`. DeepInfra keys have none; orkeys revokes them itself.
 
