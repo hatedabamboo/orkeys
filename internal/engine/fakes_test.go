@@ -11,6 +11,7 @@ import (
 
 	"github.com/hatedabamboo/orkeys/internal/manifest"
 	"github.com/hatedabamboo/orkeys/internal/provider"
+	"github.com/hatedabamboo/orkeys/internal/secrets"
 	"github.com/hatedabamboo/orkeys/internal/state"
 )
 
@@ -262,12 +263,16 @@ func (c *clock) now() time.Time      { return c.t }
 func (c *clock) add(d time.Duration) { c.t = c.t.Add(d) }
 func days(n int) time.Duration       { return time.Duration(n) * 24 * time.Hour }
 
+// Read returns secrets.ErrNotFound for a path without fields, as the Vault and AWS stores do.
 func (s *fakeStore) Read(_ context.Context, path string) (map[string]string, error) {
 	out := map[string]string{}
 	for k, v := range s.secrets {
 		if p, f, ok := strings.Cut(k, "#"); ok && p == path {
 			out[f] = v
 		}
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("fake %s: %w", path, secrets.ErrNotFound)
 	}
 	return out, nil
 }

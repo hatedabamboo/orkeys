@@ -608,7 +608,7 @@ func TestExampleInventoryIsValid(t *testing.T) {
 	if ps := inv.Validate(); len(ps) != 0 {
 		t.Fatalf("examples/inventory has problems: %v", ps)
 	}
-	if len(inv.Keys) != 2 || inv.Teams["search"] == nil {
+	if len(inv.Keys) != 3 || inv.Teams["search"] == nil {
 		t.Fatalf("loaded %d keys", len(inv.Keys))
 	}
 }
@@ -1114,5 +1114,110 @@ func TestUnmanagedOptions(t *testing.T) {
 		if _, err := Load(root); err == nil {
 			t.Errorf("%s: want a load error", strings.TrimSpace(bad))
 		}
+	}
+}
+
+const voidProviders = providersMap + `  tts:
+    kind: void
+    options: {console: https://vendor.example/keys}
+`
+
+func TestVoidKey(t *testing.T) {
+	root := withProviders(t, voidProviders)
+	key := `name: prod-chat-core-tts
+kind: production
+provider: tts
+env: prod
+description: TTS for the voice gateway.
+%s`
+	write := func(extra string) *Inventory {
+		t.Helper()
+		_ = os.WriteFile(filepath.Join(root, "teams/chat-core/prod-chat-core-tts.yaml"), []byte(fmt.Sprintf(key, extra)), 0o644)
+		inv, err := Load(root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return inv
+	}
+
+	inv := write("")
+	if ps := inv.Validate(); len(ps) != 0 {
+		t.Fatalf("a void key without secret: %v", ps)
+	}
+	k := inv.Key("prod-chat-core-tts")
+	if k.Budget != (Budget{}) || k.TTL.Duration != 90*24*time.Hour || !inv.Policy.Manual("tts") || inv.Policy.Manual("openrouter") {
+		t.Fatalf("defaults: budget %+v, ttl %s", k.Budget, k.TTL.Duration)
+	}
+	ok := "secret: {path: kv/llm/tts}\ndisabled: true\nconsumers: [{type: direct, cluster: prod-eu, namespace: chat, restart: [deployment/x]}]\n"
+	if ps := write(ok).Validate(); len(ps) != 0 {
+		t.Fatalf("a void key with secret and consumers: %v", ps)
+	}
+
+	for extra, want := range map[string]string{
+		"budget: {limit: 10}":      "budget: not allowed for void provider tts",
+		"import: {id: x, name: y}": "import: not allowed for void provider tts",
+		"track_only: true":         "track_only: not allowed for void provider tts",
+		"scopes: [read]":           "scopes: tts keys have no scopes",
+		"issued: 2999-01-01":       "issued: 2999-01-01 is in the future",
+		"consumers: [{type: direct, cluster: prod-eu, namespace: chat, restart: [deployment/x]}]": "consumers: need secret",
+	} {
+		if ps := fmt.Sprint(write(extra).Validate()); !strings.Contains(ps, want) {
+			t.Errorf("%s: want %q in %s", extra, want, ps)
+		}
+	}
+}
+
+func TestIssued(t *testing.T) {
+	root := withProviders(t, voidProviders)
+	write := func(prov, issued string) (*Inventory, error) {
+		body := "name: prod-chat-core-x\nkind: production\nprovider: " + prov + "\nenv: prod\ndescription: d\n" +
+			"secret: {path: kv/llm/x}\nissued: " + issued + "\n"
+		_ = os.WriteFile(filepath.Join(root, "teams/chat-core/prod-chat-core-x.yaml"), []byte(body), 0o644)
+		return Load(root)
+	}
+	inv, err := write("tts", "2026-09-01")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if k := inv.Key("prod-chat-core-x"); k.Issued.String() != "2026-09-01" || len(inv.Validate()) != 0 {
+		t.Fatalf("issued %q, problems %v", k.Issued, inv.Validate())
+	}
+	if inv, err = write("openrouter", "2026-09-01"); err != nil {
+		t.Fatal(err)
+	}
+	if ps := fmt.Sprint(inv.Validate()); !strings.Contains(ps, "issued: only for void providers") {
+		t.Errorf("issued on an openrouter key: %s", ps)
+	}
+	for _, bad := range []string{"2026-9-1", "yesterday", "[2026-09-01]"} {
+		if _, err := write("tts", bad); err == nil || !strings.Contains(err.Error(), "want a date YYYY-MM-DD") {
+			t.Errorf("%s: %v", bad, err)
+		}
+	}
+}
+
+func TestVoidProviderProblems(t *testing.T) {
+	for providers, want := range map[string]string{
+		providersMap + "  tts: {kind: void, management_key: kv/x}\n":        "providers.tts: management_key, workspace and base_url are not used by void providers",
+		providersMap + "  tts: {kind: void, options: {track_only: true}}\n": "providers.tts.options.track_only: not allowed for void providers",
+		providersMap + "  tts: {kind: void, options: {project: p}}\n":       "providers.tts.options.project: unknown option for void",
+	} {
+		inv, err := Load(withProviders(t, providers))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ps := fmt.Sprint(inv.Validate()); !strings.Contains(ps, want) {
+			t.Errorf("want %q in %s", want, ps)
+		}
+	}
+	root := withProviders(t, voidProviders)
+	p := filepath.Join(root, "policy.yaml")
+	b, _ := os.ReadFile(p)
+	_ = os.WriteFile(p, []byte(strings.Replace(string(b), "providers: [openrouter, deepinfra]", "providers: [openrouter, tts]", 1)), 0o644)
+	inv, err := Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ps := fmt.Sprint(inv.Validate()); !strings.Contains(ps, "kinds.personal.providers: tts is a void provider") {
+		t.Errorf("request kind with a void provider: %s", ps)
 	}
 }

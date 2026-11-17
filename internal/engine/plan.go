@@ -36,6 +36,15 @@ const (
 	ActSyncConsumers ActionType = "sync-consumers"
 	// ActResume finishes an interrupted key issue.
 	ActResume ActionType = "resume"
+	// ActRegister saves the state of a new void key. It adopts the value in the secret if there is one.
+	ActRegister ActionType = "register"
+	// ActAdoptValue takes a new value that a person wrote to the secret of a void key and starts a rotation.
+	ActAdoptValue ActionType = "adopt-value"
+	// ActSetDates sets the creation and expiry dates of a void key from the manifest issued date and the ttl.
+	ActSetDates ActionType = "set-dates"
+	// ActMoveSecret copies the value of a void key to the new secret places and deletes the old places.
+	// orkeys cannot make a new void key, so it moves the current one.
+	ActMoveSecret ActionType = "move-secret"
 )
 
 type Action struct {
@@ -193,6 +202,12 @@ func (e *Engine) plan(ctx context.Context) (*Plan, map[string][]provider.Key, er
 				"key_id", short(st.KeyID), "phase", st.Phase, "rotation", st.Rotation, "track_only", k.TrackOnly() || st.TrackOnly)
 		}
 
+		if p.Caps().Manual {
+			if err := e.planVoid(ctx, plan, act); err != nil {
+				return nil, nil, err
+			}
+			continue
+		}
 		if k.TrackOnly() || (st != nil && st.TrackOnly) {
 			e.planTracked(plan, act, lists[k.Provider], known)
 			continue
@@ -303,9 +318,12 @@ func (e *Engine) plan(ctx context.Context) (*Plan, map[string][]provider.Key, er
 			})
 			continue
 		}
+		detail := "manifest removed; revoke " + strings.Join(shortAll(st.KnownIDs()), ", ")
+		if e.manual(st.Provider) {
+			detail = voidDeleteDetail(st)
+		}
 		plan.Actions = append(plan.Actions, Action{
-			Type: ActDelete, Name: st.Name, Team: st.Team, Provider: st.Provider, State: st,
-			Detail: "manifest removed; revoke " + strings.Join(shortAll(st.KnownIDs()), ", "),
+			Type: ActDelete, Name: st.Name, Team: st.Team, Provider: st.Provider, State: st, Detail: detail,
 		})
 	}
 

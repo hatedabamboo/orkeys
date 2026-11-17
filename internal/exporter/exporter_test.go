@@ -3,6 +3,7 @@ package exporter
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -321,5 +322,38 @@ func TestDisabledAndFallbackMetrics(t *testing.T) {
 		if strings.Contains(out, unwanted) {
 			t.Errorf("unexpected %q in:\n%s", unwanted, out)
 		}
+	}
+}
+
+func TestVoidKeyMetrics(t *testing.T) {
+	void, err := provider.New("void", provider.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	x := &Exporter{
+		Store: states{
+			{Name: "prod-a-v", Provider: "tts", KeyID: "fp-1", ExpiresAt: time.Unix(1800000000, 0)},
+			{Name: "prod-a-w", Provider: "tts", Secrets: []state.SecretRef{{Path: "kv/w", Field: "api_key"}}},
+		},
+		Providers: provider.Set{"tts": void},
+		Log:       &strings.Builder{},
+	}
+	x.Poll(context.Background())
+	rec := httptest.NewRecorder()
+	x.ServeHTTP(rec, httptest.NewRequest("GET", "/metrics", nil))
+	out := rec.Body.String()
+	l := `{name="%s",team="",kind="",env="",provider="tts",service="",owner="",notify_channel="",alert_channel="",reset="monthly"}`
+	for _, want := range []string{
+		"orkeys_key_missing" + fmt.Sprintf(l, "prod-a-v") + " 0",
+		"orkeys_key_missing" + fmt.Sprintf(l, "prod-a-w") + " 1",
+		"orkeys_key_expires_timestamp_seconds" + fmt.Sprintf(l, "prod-a-v") + " 1.8e+09",
+		`orkeys_unmanaged_keys{provider="tts"} 0`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "orkeys_key_budget_usd{") {
+		t.Errorf("a void key has no budget:\n%s", out)
 	}
 }

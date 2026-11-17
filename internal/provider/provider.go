@@ -27,6 +27,9 @@ type Caps struct {
 	Disable bool
 	// MaxExpiry is the longest native expiry. Zero means no limit.
 	MaxExpiry time.Duration
+	// Manual: the provider has no API. A person makes and revokes keys at the vendor. orkeys tracks the expiry and
+	// delivers the value that the person enters with orkeys put. The adapter has no credentials.
+	Manual bool
 }
 
 type Key struct {
@@ -123,6 +126,7 @@ var registry = []Info{
 	{Name: "openrouter", Short: "or", Caps: openRouterCaps, new: func(c Config) Provider { return newOpenRouter(c) }},
 	{Name: "deepinfra", Short: "di", Caps: deepInfraCaps, CheckScopes: checkDeepInfraScopes, new: func(c Config) Provider { return newDeepInfra(c) }},
 	{Name: "openai", Short: "oa", Caps: openAICaps, Options: openAIOptions, new: func(c Config) Provider { return newOpenAI(c) }},
+	{Name: "void", Caps: voidCaps, Options: voidOptions, new: func(c Config) Provider { return newVoid(c) }},
 }
 
 func Lookup(name string) (Info, bool) {

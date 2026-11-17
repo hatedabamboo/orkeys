@@ -80,6 +80,9 @@ no disabled flag: orkeys creates, rotates and deletes OpenAI keys, and tracks th
 | `exporter`: last use | yes | no | yes |
 | Old key "still in use" check at revoke | total usage | spend this month | last use (exact), spend this month |
 
+A provider of type `void` has no API. orkeys tracks the expiry of its keys and delivers the values that a person
+enters. See [Keys without an API](#keys-without-an-api).
+
 `orkeys keys -p <provider>` lists, creates, limits, disables, enables and deletes keys of any provider in
 `policy.yaml` with the same commands for all providers. It does what all adapters can do; the provider commands
 above show the fields of one API.
@@ -269,6 +272,7 @@ To start, copy [`examples/inventory`](examples/inventory) and run `orkeys valida
 | `orkeys rotate --now <key>` | Rotate a manifest key now |
 | `orkeys rotate --retry <key>` | Retry a failed rotation |
 | `orkeys rotate --only <key>` | Process only these keys |
+| `orkeys put <key>` | Write a new value of a `void` key from stdin. `--issued <date>` sets the creation date. The next `rotate` syncs the consumers. See [Keys without an API](#keys-without-an-api) |
 | `orkeys request --user <login> --kind <kind> --provider <name> --purpose <text>` | Issue a key of a kind with `source: request`, encrypted to the user's GitHub SSH keys. Optional `--limit` and `--ttl`, up to the kind maximum |
 | `orkeys issued` | List active requested keys with owner, purpose, spend and expiry. Filters: `--team`, `--owner`, `--kind`. `--markdown` for a table |
 | `orkeys revoke <name>...` | **Revokes keys.** Revoke requested keys before they expire: deletes the provider key, the secret fields and the GitHub secrets, and removes the state. Optional `--reason`. Asks for confirmation; `--yes` in scripts |
@@ -318,10 +322,10 @@ Unknown fields are errors, so a typo does not pass silently.
 | `secrets` | `vault` | Secrets store: `vault` or `aws` (Secrets Manager) |
 | `providers[]` | | Provider accounts. A list of `{name, kind, ...}`, or a map from name to config. See [Providers](#providers) |
 | `providers[].name` | | Name used in manifests (`provider:`), kinds, state and metrics. Matches `^[a-z][a-z0-9-]*$` |
-| `providers[].kind` | the name | Provider type: `openrouter`, `deepinfra` or `openai` |
+| `providers[].kind` | the name | Provider type: `openrouter`, `deepinfra`, `openai` or `void` (no API, see [Keys without an API](#keys-without-an-api)) |
 | `providers[].management_key` | | Secret path with field `key` (and optional `self_id`, `workspace`, `base_url`, and the provider options). Optional if `ORKEYS_<NAME>_KEY` is set |
 | `providers[].workspace`, `base_url` | | OpenRouter workspace or OpenAI project ID; API base URL |
-| `providers[].options` | | Settings of the provider. All types: `report_unmanaged`, `ignore_disabled`, `ignore_unmanaged` (see [Keys without a manifest](#keys-without-a-manifest)) and `track_only` (see [Tracking a key](#tracking-a-key)). `openai`: `project` (the project ID, required here or in `workspace`). Unknown options are errors |
+| `providers[].options` | | Settings of the provider. All types: `report_unmanaged`, `ignore_disabled`, `ignore_unmanaged` (see [Keys without a manifest](#keys-without-a-manifest)) and `track_only` (see [Tracking a key](#tracking-a-key)). `openai`: `project` (the project ID, required here or in `workspace`). `void`: `console` (the vendor page for keys; events show it). Unknown options are errors |
 | `envs` | `[prod, staging, dev]` | Allowed `env` values of manifests |
 | `name_prefix` | `{env}-{team}-` | Required start of key names. `{env}` and `{team}` are replaced. `""` turns the check off |
 | `naming` | `^[a-z0-9][a-z0-9._-]*$` | Regex that every key name must match |
@@ -465,13 +469,14 @@ service (Alertmanager, a CI step, a bot) can route them.
 | `service` | no | Free text; exported as a metric label |
 | `description` | yes | |
 | `scopes` | no | DeepInfra and OpenAI. DeepInfra default: `[inference]`; `unrestricted` is not allowed. OpenAI default: all permissions of the service account; for example `[api.all.read]` |
-| `budget.limit` | no | Limit in USD at the provider; the provider blocks the key when spend in the period reaches it. OpenAI has no per-key limit: orkeys only exports the budget as a metric. Default: the kind `budget.limit`. Up to the kind `max_limit` |
+| `budget.limit` | no | Limit in USD at the provider; the provider blocks the key when spend in the period reaches it. OpenAI has no per-key limit: orkeys only exports the budget as a metric. Default: the kind `budget.limit`. Up to the kind `max_limit`. Not allowed for `void` providers |
 | `budget.reset` | no | Limit period: `daily`, `weekly`, `monthly` (DeepInfra: monthly only). Default: the kind `budget.reset` |
 | `ttl` | no | `90d`, `2w`, `24h`. Default and maximum: the kind `ttl`. OpenAI: at most `365d` |
-| `secret.path`, `secret.field` | path: yes, except with `track_only: true` | Where the key goes. Vault: `<mount>/<path>`; AWS: secret name. Field default `api_key`. Other fields in the same secret are kept. `secret` is one mapping or a list of mappings: orkeys writes the same key to each place. Two keys can share a path, not a path and field |
+| `secret.path`, `secret.field` | path: yes, except with `track_only: true` or a `void` provider | Where the key goes. Vault: `<mount>/<path>`; AWS: secret name. Field default `api_key`. Other fields in the same secret are kept. `secret` is one mapping or a list of mappings: orkeys writes the same key to each place. Two keys can share a path, not a path and field |
 | `consumers[]` | no | `type` (`eso`, `direct` or `github`). For `eso` and `direct`: `cluster`, `namespace`, `externalsecret` (eso), `restart` (`deployment/x`, `statefulset/x`, `daemonset/x`, `cronjob/x`). orkeys restarts only what `restart` lists. For `github`: `repo` (`owner/repo`) or `org`, `environment` (repo only), `name`, `visibility` (org only: `private` (default) or `all`), `workflows` (repo only: a list of `{workflow, ref, inputs}` to run after each write). See [GitHub Actions secrets](#github-actions-secrets). A field of another type is an error |
 | `import.id`, `import.name` | no | Adopt an existing provider key instead of creating one. `name` is its current name at the provider. See below |
 | `disabled` | no | `true` disables the key at the provider and stops its rotation. Default `false`. Not for OpenAI keys. See below |
+| `issued` | no | `void` keys only. Date of the value in `secret` (`YYYY-MM-DD`). The key expires at `issued` plus `ttl`. A change tells `apply` that the secret holds a new value. See [Keys without an API](#keys-without-an-api) |
 | `track_only` | no | `true`: orkeys saves the state of the `import` key and exports its metrics, and does not change the key. Default: the provider option `track_only`. `false` on a key of a provider with `track_only: true` makes a managed key. See [Tracking a key](#tracking-a-key) |
 
 ```yaml
@@ -703,6 +708,93 @@ key.
 `ROTATION` column. The exporter shows `orkeys_key_hard_limit_usd` from the limit that the provider reports, and no
 `orkeys_key_expires_timestamp_seconds` when the provider key has no expiry.
 
+#### Keys without an API
+
+Limits:
+
+- orkeys cannot make, rotate or revoke the key at the vendor. A person does it. orkeys tells the team when.
+- orkeys has no spend data. `budget`, `import` and `track_only` are not allowed.
+- The key ID is a hash of the key name and the value (`fp-...`). The hash goes to the state and to the secret
+  metadata. It is safe for random API keys. It does not protect a short password.
+- `plan` reads the secret values of `void` keys. The `plan` job needs read access to them.
+- orkeys does not see a new value in the secret by itself. Change `issued` in the manifest, or run `orkeys put`.
+- `put` needs write access to the state store and the secrets store.
+- The consumers sync in the next `rotate` run, with the credentials of that run.
+
+Use a provider of type `void` for a vendor without a key API. orkeys tracks the expiry of the key, writes the value
+to `secret`, syncs the consumers and sends reminders. A key without `secret` is only an expiry date: orkeys sends the
+reminders and exports the expiry. `consumers` need a `secret`.
+
+The key expires at `issued` plus `ttl`. Without `issued`, it expires at `ttl` after the time when orkeys got the
+value.
+
+```yaml
+providers:
+  - name: elevenlabs
+    kind: void                                         # no API and no management key
+    options:
+      console: https://elevenlabs.io/app/settings/api-keys   # link in the reminders
+```
+
+```yaml
+name: prod-voice-tts
+kind: production
+provider: elevenlabs
+env: prod
+description: TTS for the voice gateway.
+issued: 2026-09-01                            # date of the value in secret; change it at each rotation
+ttl: 90d                                      # rotation period; default: the kind ttl
+secret:
+  path: secret/llm/prod/voice/tts
+consumers:
+  - type: eso                                 # force-sync, then restart, after each new value
+    cluster: prod-eu
+    namespace: voice
+    externalsecret: voice-llm
+    restart: [deployment/voice-gw]
+```
+
+1. Merge the manifest. `apply` registers the key (`register`). `plan` shows the case:
+   - The secret holds a value: orkeys adopts it.
+   - The secret is empty: the key waits for a value. `plan` warns, and `rotate` sends a `value_missing` alert once a
+     day. Write the key to the secret: the next `plan` shows `adopt-value`. Or run `orkeys put`.
+   - The places in `secret` hold different values: `plan` warns and registers nothing. Make the values equal.
+2. At `rotate_before`, `rotate` sends `expiry_notice`. After the expiry, it sends `key_expired` once a day.
+3. Make a new key at the vendor. Then do one of these:
+   - Write the key to the secret and change `issued` in the manifest. `plan` shows `adopt-value` with the new hash.
+     The PR records the rotation.
+   - Run `orkeys put <key>` and paste the key, or pipe it to stdin. `put` writes it to all places in `secret`.
+     If the manifest has `issued`, the event tells you the new date to write there.
+4. The next `rotate` syncs the consumers and sends `revoke_by_hand` with the hash of the old key. Revoke the old
+   key at the vendor. After `revoke_grace`, orkeys forgets the old hash.
+
+```sh
+orkeys put prod-voice-tts                         # issued now
+pbpaste | orkeys put prod-voice-tts --issued 2026-09-01
+```
+
+For a key without `secret`, `put` reads no value and sets only the dates.
+
+When `issued` changes, `plan` reads the secret:
+
+| Secret holds | `plan` shows |
+|---|---|
+| A new value | `adopt-value`: new hash, new dates. The old hash waits for `revoke_by_hand` |
+| The same value | `set-dates`: only the dates change. Check that you wrote the new key: "same value" in the plan means that you did not |
+| Different values in the places | A warning. No action |
+| Nothing | A warning. No action |
+
+| Change | Effect at `apply` or `rotate` |
+|---|---|
+| New manifest | `register`: saves the state. Adopts the value in `secret` if it is set |
+| Change `issued` | `adopt-value` or `set-dates`, see above |
+| Change `ttl` | `set-dates`: the expiry moves |
+| Change `secret` | `move-secret`: copies the value to the new places. The next `rotate` syncs the consumers. The old places stay until `revoke_grace` ends |
+| Remove `secret` | `move-secret`: deletes the value. `revoke_by_hand` names the key to revoke |
+| `disabled: true` | `update-state`. Stops the reminders. The key stays active at the vendor |
+| Delete the manifest | `delete`: deletes the secret fields, the GitHub secrets and the state. Counts against `max_deletes`. `revoke_by_hand` names the key to revoke |
+| `rotate --now` | Error. Make the key at the vendor and run `put` |
+
 #### Keys without a manifest
 
 Limits:
@@ -781,7 +873,7 @@ The result key depends on the command: `plan` (apply), `issued` (request), `revo
 |---|---|---|
 | `key_issued` | info | A key was created |
 | `key_imported` | info | An existing provider key was adopted |
-| `key_tracked` | info | `apply` saved the state of a key with `track_only: true` |
+| `key_tracked` | info | `apply` saved the state of a key with `track_only: true`, or registered a `void` key |
 | `key_untracked` | info | `apply` removed the state of a tracked key whose manifest is gone. The key stays at the provider |
 | `key_revoked` | info | A key was revoked (manifest removed, expired, owner left, `orkeys revoke`) |
 | `key_disabled` | info | A key was disabled (`disabled: true` in the manifest) |
@@ -789,11 +881,14 @@ The result key depends on the command: `plan` (apply), `issued` (request), `revo
 | `rotation_started` | info | A new key was written; consumers sync next. Level `alert` when orkeys issued the key because an earlier run stopped before it wrote its key to the secrets |
 | `rotation_synced` | info | Consumers use the new key; the old key will be revoked after `revoke_grace` |
 | `old_key_revoked` | info | The old key of a rotation was revoked |
-| `expiry_notice` | info | A self-service key expires within `notify_before` |
+| `expiry_notice` | info | A self-service key expires within `notify_before`, or a `void` key within `rotate_before` |
 | `rotation_failed` | alert | A consumer did not sync or restart; the old key stays active |
 | `old_key_in_use` | alert | The old key was used after the switch; it is not revoked |
 | `consumers_synced` | info | `apply` wrote or deleted push consumer targets (GitHub Actions secrets) |
 | `consumers_sync_failed` | alert | A push consumer write or delete failed; the next `apply` tries again |
+| `key_expired` | alert | A `void` key is past its expiry. Once a day until `orkeys put` |
+| `value_missing` | alert | A `void` key with `secret` has no value. Once a day until `orkeys put` |
+| `revoke_by_hand` | alert | orkeys does not use an old `void` key any more. Revoke it at the vendor |
 
 `level` picks `channel`: `info` uses the team's `channels.notifications`, `alert` uses `channels.alerts`.
 `run_url` is set when orkeys runs in GitHub Actions.
@@ -973,7 +1068,7 @@ this rule is the only control of spend: OpenAI does not stop a key at its budget
 | Metric | Meaning |
 |---|---|
 | `orkeys_key_spend_usd` | Spend in the current limit period (`reset`: today, this week or this month) |
-| `orkeys_key_budget_usd` | `budget.limit` from the manifest for the same period |
+| `orkeys_key_budget_usd` | `budget.limit` from the manifest for the same period. Not for `void` keys |
 | `orkeys_key_hard_limit_usd` | Limit that the provider reports for the same period. A limit changed outside orkeys shows here, and differs from `orkeys_key_budget_usd`. No series for a key without a limit at the provider, and for providers without a per-key limit (OpenAI). A key missing at the provider shows `budget.limit` |
 | `orkeys_key_usage_usd_total` | Counter of the key usage in USD, as the provider reports it. Use `increase()` or `rate()`. It resets at each rotation; DeepInfra and OpenAI also reset it at the start of each month. OpenAI data is hours late |
 | `orkeys_key_expires_timestamp_seconds` | Expiry. Not for a tracked key without a provider expiry |
@@ -981,7 +1076,7 @@ this rule is the only control of spend: OpenAI does not stop a key at its budget
 | `orkeys_key_created_timestamp_seconds` | Creation time of the key at the provider. When the provider does not report it: the time when orkeys created or adopted the key |
 | `orkeys_key_rotation_state` | 0 idle, 1 consumers not synced, 2 old key waits for revoke, 4 failed |
 | `orkeys_key_pending_revoke_timestamp_seconds` | Earliest planned revoke time of an old key after a rotation. `rotate` holds the revoke while the old key is in use. A value far in the past means that a consumer still uses the old key |
-| `orkeys_key_missing` | 1 if the key is not found at the provider |
+| `orkeys_key_missing` | 1 if the key is not found at the provider, or a `void` key has no value yet. A `void` key with a value shows 0: orkeys cannot see it at the vendor |
 | `orkeys_key_disabled` | 0 enabled, 1 disabled by the manifest (`disabled: true`), 2 disabled at the provider and not in the manifest. DeepInfra: a limit of 0 is disabled. No series for a missing key |
 | `orkeys_key_track_only` | 1 if the key has `track_only: true`: orkeys does not rotate it, and a person must renew it before `orkeys_key_expires_timestamp_seconds`. 0 for a managed key |
 | `orkeys_unmanaged_keys{provider}` | Provider keys without state that the provider options do not ignore. Not exported with `report_unmanaged: false`. The exporter reads the options from `--policy` or from the copy in the state store |
@@ -1022,15 +1117,15 @@ Layout:
 | `internal/openai` | HTTP client for the OpenAI Admin API: project keys, service accounts, costs |
 | `internal/httpx` | JSON over HTTP with retries: reads on network errors, 408, 429 and 5xx; writes on 429 |
 | `internal/nullable` | request fields that are absent, null or set |
-| `internal/provider` | common interface, optional `Limiter` and `Disabler`, and registry of the providers |
+| `internal/provider` | common interface, optional `Limiter` and `Disabler`, and registry of the providers; `void.go` is the provider without an API |
 | `internal/provider/providertest` | contract test that every provider adapter passes |
 | `internal/manifest` | inventory loading and validation; consumer types in `consumer.go` |
 | `internal/state`, `internal/secrets` | state and secret store interfaces |
 | `internal/vault`, `internal/s3store`, `internal/awssm`, `internal/backend` | Vault KV v2, S3, Secrets Manager, and the factory that picks them |
-| `internal/engine` | plan, apply, rotate, request, issued, revoke, state listing, hygiene, import; consumer drivers in `consumers.go`, recovery in `recover.go` |
+| `internal/engine` | plan, apply, rotate, request, issued, revoke, state listing, hygiene, import; consumer drivers in `consumers.go`, recovery in `recover.go`, `void` keys and `put` in `void.go` |
 | `internal/exporter` | Prometheus metrics |
 | `internal/kube`, `internal/deliver`, `internal/github` | kubectl, age delivery, org membership, Actions secrets |
-| `internal/cli` | cobra commands: `openrouter.go`, `deepinfra.go`, `openai.go`, `keys.go`, `inventory.go`, `exporter_cmd.go`; wiring in `wire.go`, output in `render.go`, event webhook in `webhook.go`, log setup in `logging.go` |
+| `internal/cli` | cobra commands: `openrouter.go`, `deepinfra.go`, `openai.go`, `keys.go`, `inventory.go`, `put.go`, `exporter_cmd.go`; wiring in `wire.go`, output in `render.go`, event webhook in `webhook.go`, log setup in `logging.go` |
 | `examples/inventory` | example inventory repository with rotate and hygiene workflows; a test keeps it valid |
 | `internal/values` | input parsing and formatting |
 

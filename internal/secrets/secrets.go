@@ -2,6 +2,7 @@ package secrets
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"strings"
@@ -19,6 +20,9 @@ type Store interface {
 	// Meta returns the metadata of one field, or nil when the secret does not exist.
 	Meta(ctx context.Context, path, field string) (map[string]string, error)
 }
+
+// ErrNotFound is the error of Read for a secret that does not exist.
+var ErrNotFound = errors.New("not found")
 
 // Metadata names. A store keeps each name per field, as <name>.<field> (see FieldMetaName).
 const (

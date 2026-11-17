@@ -26,6 +26,9 @@ const (
 
 const (
 	RevokeRotation = "rotation"
+	// RevokeManual is an old value of a void key. A person revokes it at the vendor. orkeys forgets it after the
+	// grace time.
+	RevokeManual = "manual"
 )
 
 // Phase marks a change that has more than one step. The state is saved before the first step.
@@ -83,6 +86,11 @@ type State struct {
 	RotationError  string          `json:"rotation_error,omitempty"`
 	PendingRevokes []PendingRevoke `json:"pending_revokes,omitempty"`
 	ExpiryNotified bool            `json:"expiry_notified,omitempty"`
+	// LastReminded is the time of the last repeated alert about a void key: expired, or no value yet.
+	LastReminded time.Time `json:"last_reminded,omitzero"`
+	// Issued is the issued date of the void key manifest at the last apply, or "". plan reads the secret again
+	// when the manifest date differs.
+	Issued string `json:"issued,omitempty"`
 
 	LimitUSD      float64     `json:"limit_usd"`
 	LimitReset    string      `json:"limit_reset,omitempty"`
