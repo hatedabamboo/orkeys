@@ -29,18 +29,19 @@ const (
 )
 
 type app struct {
-	version   string
-	baseURL   string
-	workspace string
-	timeout   time.Duration
-	output    string
-	json      bool
-	repo      string
-	lockWait  time.Duration
-	diBaseURL string
-	oaBaseURL string
-	oaProject string
-	events    *eventPrinter
+	version    string
+	baseURL    string
+	workspace  string
+	timeout    time.Duration
+	output     string
+	json       bool
+	repo       string
+	lockWait   time.Duration
+	diBaseURL  string
+	oaBaseURL  string
+	oaProject  string
+	falBaseURL string
+	events     *eventPrinter
 
 	eventsFile    string
 	eventsWebhook string
@@ -71,6 +72,7 @@ Provider commands manage keys directly:
   orkeys openrouter (or) ...   OpenRouter keys
   orkeys deepinfra (di) ...    DeepInfra API tokens
   orkeys openai (oa) ...       OpenAI project API keys
+  orkeys fal ...               fal.ai API keys
   orkeys keys -p <provider>    keys of any provider in policy.yaml, with the common commands
 
 Inventory commands (validate, plan, apply, rotate, request, issued, import, hygiene, unlock, exporter)
@@ -127,7 +129,7 @@ Environment for inventory commands:
 	pf.StringVar(&a.logFormat, "log-format", "text", "log format on stderr: text|json")
 	pf.BoolVar(&a.debug, "debug", false, "write debug logs to stderr (env "+EnvDebug+")")
 
-	root.AddCommand(a.openrouterCmd(), a.deepinfraCmd(), a.openaiCmd(), a.keysCmd())
+	root.AddCommand(a.openrouterCmd(), a.deepinfraCmd(), a.openaiCmd(), a.falCmd(), a.keysCmd())
 	root.AddCommand(a.inventoryCmds()...)
 	return root
 }

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/hatedabamboo/orkeys/internal/openai"
+	"github.com/hatedabamboo/orkeys/internal/spend"
 )
 
 // openAIOptions are the options of openai. project is the project ID (proj_...). It has priority over workspace.
@@ -43,14 +44,14 @@ func (o *openAI) List(ctx context.Context) ([]Key, error) {
 		return nil, err
 	}
 	now := o.now()
-	costs, err := o.c.Costs(ctx, openai.SpendStart(now))
+	costs, err := o.c.Costs(ctx, spend.Start(now))
 	if err != nil {
 		return nil, fmt.Errorf("costs: %w", err)
 	}
-	spend := openai.SpendByKey(costs, now)
+	byKey := spend.ByKey(costs, now)
 	out := make([]Key, 0, len(keys))
 	for _, k := range keys {
-		s := spend[k.ID]
+		s := byKey[k.ID]
 		d, w, m := s.Day, s.Week, s.Month
 		out = append(out, Key{
 			ID:            k.ID,

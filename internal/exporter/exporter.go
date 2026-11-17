@@ -281,9 +281,9 @@ func (x *Exporter) render() []byte {
 		},
 		func(st *state.State, l []string, k *provider.Key) {
 			// The provider value is a counter of the current key. A new key after a rotation and the start of a
-			// month at DeepInfra and OpenAI reset it. rate() and increase() handle the reset.
+			// month at DeepInfra, OpenAI and fal.ai reset it. rate() and increase() handle the reset.
 			if k != nil && k.UsageUSD != nil {
-				w.counter("orkeys_key_usage_usd_total", "Usage of the key in USD as the provider reports it. Resets at rotation; DeepInfra and OpenAI reset it monthly.", l, *k.UsageUSD)
+				w.counter("orkeys_key_usage_usd_total", "Usage of the key in USD as the provider reports it. Resets at rotation; DeepInfra, OpenAI and fal.ai reset it monthly.", l, *k.UsageUSD)
 			}
 		},
 		func(st *state.State, l []string, _ *provider.Key) {

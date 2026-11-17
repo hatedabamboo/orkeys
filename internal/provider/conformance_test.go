@@ -48,6 +48,16 @@ func TestContractOpenAI(t *testing.T) {
 	providertest.Run(t, p)
 }
 
+func TestContractFal(t *testing.T) {
+	srv := httptest.NewServer(&memFal{})
+	t.Cleanup(srv.Close)
+	p, err := provider.New("fal", provider.Config{BaseURL: srv.URL, Key: "self:secret"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	providertest.Run(t, p)
+}
+
 func writeJSON(w http.ResponseWriter, v any) { _ = json.NewEncoder(w).Encode(v) }
 
 func decode(r *http.Request) map[string]any {
@@ -223,6 +233,45 @@ func (f *memOpenAI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		f.keys = kept
+	default:
+		w.WriteHeader(http.StatusNotFound)
+	}
+}
+
+type memFal struct {
+	mu   sync.Mutex
+	n    int
+	keys []map[string]any
+}
+
+func (f *memFal) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	rest, one := strings.CutPrefix(r.URL.Path, "/keys/")
+	switch {
+	case r.Method == http.MethodGet && r.URL.Path == "/keys":
+		keys := []map[string]any{}
+		keys = append(keys, f.keys...)
+		writeJSON(w, map[string]any{"keys": keys, "has_more": false, "next_cursor": nil})
+	case r.Method == http.MethodGet && r.URL.Path == "/models/usage":
+		writeJSON(w, map[string]any{"time_series": []any{}, "has_more": false, "next_cursor": nil})
+	case r.Method == http.MethodPost && r.URL.Path == "/keys":
+		in := decode(r)
+		f.n++
+		id := fmt.Sprintf("k%d", f.n)
+		f.keys = append(f.keys, map[string]any{"key_id": id, "alias": in["alias"], "created_at": time.Now().UTC().Format(time.RFC3339),
+			"expires_at": in["expires_at"], "mode": "preset", "preset": in["preset"]})
+		w.WriteHeader(http.StatusCreated)
+		writeJSON(w, map[string]any{"key_id": id, "key_secret": "s", "key": id + ":s"})
+	case one && r.Method == http.MethodPost && strings.HasSuffix(rest, "/revoke"):
+		id := strings.TrimSuffix(rest, "/revoke")
+		for i, k := range f.keys {
+			if k["key_id"] == id {
+				f.keys = append(f.keys[:i], f.keys[i+1:]...)
+				break
+			}
+		}
+		w.WriteHeader(http.StatusNoContent)
 	default:
 		w.WriteHeader(http.StatusNotFound)
 	}

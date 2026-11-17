@@ -1,9 +1,9 @@
 # orkeys: instructions for agents
 
-orkeys manages LLM provider API keys (OpenRouter, DeepInfra, OpenAI). It has two modes:
+orkeys manages LLM provider API keys (OpenRouter, DeepInfra, OpenAI, fal.ai). It has two modes:
 
-- Provider commands: `orkeys openrouter` (`or`), `orkeys deepinfra` (`di`) and `orkeys openai` (`oa`) list and change
-  keys at one provider.
+- Provider commands: `orkeys openrouter` (`or`), `orkeys deepinfra` (`di`), `orkeys openai` (`oa`) and `orkeys fal`
+  list and change keys at one provider.
 - Inventory mode: a git repository of YAML manifests is the source of truth. orkeys makes the providers, the secrets
   store, Kubernetes and GitHub Actions secrets match it, rotates keys and exports metrics.
 
@@ -23,13 +23,14 @@ orkeys manages LLM provider API keys (OpenRouter, DeepInfra, OpenAI). It has two
 | Path | Contents |
 |---|---|
 | `main.go` | Entry point. Sets `main.version` from ldflags |
-| `internal/cli` | Cobra commands: `openrouter.go`, `deepinfra.go`, `openai.go`, `keys.go` (any provider), `inventory.go`, `exporter_cmd.go`. Wiring in `wire.go`, output in `render.go` and `output.go`, event webhook in `webhook.go`, log setup in `logging.go` |
+| `internal/cli` | Cobra commands: `openrouter.go`, `deepinfra.go`, `openai.go`, `fal.go`, `keys.go` (any provider), `inventory.go`, `exporter_cmd.go`. Wiring in `wire.go`, output in `render.go` and `output.go`, event webhook in `webhook.go`, log setup in `logging.go` |
 | `internal/engine` | Inventory logic: `plan.go`, `apply.go`, `rotate.go`, `request.go`, `revoke.go`, `tracked.go`, `hygiene.go`, `import.go`, `teams.go`, `consumers.go` (consumer drivers), `recover.go` (interrupted issues, secret drift), `event.go`. Test fakes in `fakes_test.go` |
 | `internal/manifest` | Load and validate `policy.yaml`, `team.yaml` and key manifests. Types in `types.go`, consumer types in `consumer.go`. Test repo in `testdata/repo` |
-| `internal/provider` | Common provider interface, optional `Limiter` and `Disabler`, and registry; OpenRouter, DeepInfra and OpenAI adapters. Contract tests in `conformance_test.go` |
+| `internal/provider` | Common provider interface, optional `Limiter` and `Disabler`, and registry; OpenRouter, DeepInfra, OpenAI and fal.ai adapters. Contract tests in `conformance_test.go` |
 | `internal/provider/providertest` | Contract test that every provider adapter passes |
 | `internal/nullable` | Request fields that are absent, null or set |
-| `internal/openrouter`, `internal/deepinfra`, `internal/openai` | HTTP clients for the provider APIs |
+| `internal/openrouter`, `internal/deepinfra`, `internal/openai`, `internal/fal` | HTTP clients for the provider APIs |
+| `internal/spend` | Spend per key in the current UTC day, week and month, from daily costs (OpenAI, fal.ai) |
 | `internal/httpx` | JSON over HTTP. Retries reads on network errors, 408, 429 and 5xx, and writes on 429. All provider clients use it |
 | `internal/state`, `internal/secrets` | State store and secrets store interfaces; state lock, schema version, heartbeats, copy of `policy.yaml` |
 | `internal/vault`, `internal/s3store`, `internal/awssm`, `internal/backend` | Vault KV v2, S3, AWS Secrets Manager, and the factory that picks one |

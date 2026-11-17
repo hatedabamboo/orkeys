@@ -159,6 +159,18 @@ budget: {limit: 10}
 ttl: 400d
 secret: {path: kv/llm/ob}
 `, "ttl: more than 365d, the longest expiry of openai keys"},
+		"full preset on fal": {"teams/chat-core/prod-chat-core-fa.yaml", `
+name: prod-chat-core-fa
+kind: production
+provider: fal
+env: prod
+service: fa
+scopes: [FULL]
+description: d
+budget: {limit: 10}
+ttl: 30d
+secret: {path: kv/llm/fa}
+`, "scopes: preset FULL is not allowed"},
 		"import without name": {"teams/chat-core/prod-chat-core-i.yaml", `
 name: prod-chat-core-i
 kind: production

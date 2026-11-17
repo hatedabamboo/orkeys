@@ -42,8 +42,9 @@ type Key struct {
 	SpendWeekUSD  *float64
 	SpendDayUSD   *float64
 	// UsageUSD grows while the key is used. OpenRouter reports the total usage.
-	// DeepInfra and OpenAI report the spend this month. It goes down when a month starts.
-	// OpenAI spend comes from the costs endpoint and is hours late. Nil means no usage data.
+	// DeepInfra, OpenAI and fal.ai report the spend this month. It goes down when a month starts.
+	// OpenAI spend comes from the costs endpoint and is hours late. fal.ai spend is an estimate.
+	// Nil means no usage data.
 	UsageUSD *float64
 }
 
@@ -123,6 +124,7 @@ var registry = []Info{
 	{Name: "openrouter", Short: "or", Caps: openRouterCaps, new: func(c Config) Provider { return newOpenRouter(c) }},
 	{Name: "deepinfra", Short: "di", Caps: deepInfraCaps, CheckScopes: checkDeepInfraScopes, new: func(c Config) Provider { return newDeepInfra(c) }},
 	{Name: "openai", Short: "oa", Caps: openAICaps, Options: openAIOptions, new: func(c Config) Provider { return newOpenAI(c) }},
+	{Name: "fal", Short: "fal", Caps: falCaps, CheckScopes: checkFalScopes, new: func(c Config) Provider { return newFal(c) }},
 }
 
 func Lookup(name string) (Info, bool) {
