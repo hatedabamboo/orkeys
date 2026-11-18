@@ -141,6 +141,7 @@ var registry = []Info{
 	{Name: "deepinfra", Short: "di", Caps: deepInfraCaps, CheckScopes: checkDeepInfraScopes, new: func(c Config) Provider { return newDeepInfra(c) }},
 	{Name: "openai", Short: "oa", Caps: openAICaps, Options: openAIOptions, new: func(c Config) Provider { return newOpenAI(c) }},
 	{Name: "fal", Short: "fal", Caps: falCaps, Options: falOptions, CheckScopes: checkFalScopes, new: func(c Config) Provider { return newFal(c) }},
+	{Name: "elevenlabs", Short: "el", Caps: elevenLabsCaps, Options: elevenLabsOptions, CheckScopes: checkElevenLabsScopes, new: func(c Config) Provider { return newElevenLabs(c) }},
 	{Name: "void", Caps: voidCaps, Options: voidOptions, new: func(c Config) Provider { return newVoid(c) }},
 }
 
