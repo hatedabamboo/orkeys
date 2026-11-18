@@ -1,9 +1,9 @@
 # orkeys: instructions for agents
 
-orkeys manages LLM provider API keys (OpenRouter, DeepInfra, OpenAI, fal.ai). It has two modes:
+orkeys manages LLM provider API keys (OpenRouter, DeepInfra, OpenAI, fal.ai, ElevenLabs). It has two modes:
 
-- Provider commands: `orkeys openrouter` (`or`), `orkeys deepinfra` (`di`), `orkeys openai` (`oa`) and `orkeys fal`
-  list and change keys at one provider.
+- Provider commands: `orkeys openrouter` (`or`), `orkeys deepinfra` (`di`), `orkeys openai` (`oa`), `orkeys fal` and
+  `orkeys elevenlabs` (`el`) list and change keys at one provider.
 - Inventory mode: a git repository of YAML manifests is the source of truth. orkeys makes the providers, the secrets
   store, Kubernetes and GitHub Actions secrets match it, rotates keys and exports metrics.
 
@@ -23,13 +23,13 @@ orkeys manages LLM provider API keys (OpenRouter, DeepInfra, OpenAI, fal.ai). It
 | Path | Contents |
 |---|---|
 | `main.go` | Entry point. Sets `main.version` from ldflags |
-| `internal/cli` | Cobra commands: `openrouter.go`, `deepinfra.go`, `openai.go`, `fal.go`, `keys.go` (any provider), `inventory.go`, `put.go`, `exporter_cmd.go`. Wiring in `wire.go`, output in `render.go` and `output.go`, event webhook in `webhook.go`, log setup in `logging.go` |
+| `internal/cli` | Cobra commands: `openrouter.go`, `deepinfra.go`, `openai.go`, `fal.go`, `elevenlabs.go`, `keys.go` (any provider), `inventory.go`, `put.go`, `exporter_cmd.go`. Wiring in `wire.go`, output in `render.go` and `output.go`, event webhook in `webhook.go`, log setup in `logging.go` |
 | `internal/engine` | Inventory logic: `plan.go`, `apply.go`, `rotate.go`, `request.go`, `revoke.go`, `tracked.go`, `hygiene.go`, `import.go`, `teams.go`, `consumers.go` (consumer drivers), `recover.go` (interrupted issues, secret drift), `void.go` (keys without an API, `put`), `event.go`. Test fakes in `fakes_test.go` |
 | `internal/manifest` | Load and validate `policy.yaml`, `team.yaml` and key manifests. Types in `types.go`, consumer types in `consumer.go`. Test repo in `testdata/repo` |
-| `internal/provider` | Common provider interface, optional `Limiter` and `Disabler`, and registry; OpenRouter, DeepInfra, OpenAI and fal.ai adapters, and `void` (no API). Contract tests in `conformance_test.go` |
+| `internal/provider` | Common provider interface, optional `Limiter` and `Disabler`, and registry; OpenRouter, DeepInfra, OpenAI, fal.ai and ElevenLabs adapters, and `void` (no API). Contract tests in `conformance_test.go` |
 | `internal/provider/providertest` | Contract test that every provider adapter passes |
 | `internal/nullable` | Request fields that are absent, null or set |
-| `internal/openrouter`, `internal/deepinfra`, `internal/openai`, `internal/fal` | HTTP clients for the provider APIs |
+| `internal/openrouter`, `internal/deepinfra`, `internal/openai`, `internal/fal`, `internal/elevenlabs` | HTTP clients for the provider APIs |
 | `internal/spend` | Spend per key in the current UTC day, week and month, from daily costs (OpenAI, fal.ai) |
 | `internal/httpx` | JSON over HTTP. Retries reads on network errors, 408, 429 and 5xx, and writes on 429. All provider clients use it |
 | `internal/state`, `internal/secrets` | State store and secrets store interfaces; state lock, schema version, heartbeats, copy of `policy.yaml` |
@@ -134,8 +134,8 @@ Ask the user for facts you cannot find: the team, the env, the provider, the lim
 - `kind` is a kind with `source: manifest` (or no `source`). Request kinds are for `orkeys request`, not for manifests.
 - `provider` is a name from `providers` and is allowed by the kind's `providers`.
 - `env` is one of `envs`. `description` is required: say what uses the key.
-- `budget.limit` is at most the kind `max_limit`. Omit `budget` to use the kind default. DeepInfra allows only
-  `reset: monthly`.
+- `budget.limit` is at most the kind `max_limit`. Omit `budget` to use the kind default. DeepInfra and ElevenLabs
+  allow only `reset: monthly`.
 - `ttl` is at most the kind `ttl`. Omit it to use the kind `ttl`.
 - `secret.path` is where orkeys writes the key. `secret.field` defaults to `api_key`. `secret` can be a list to write
   the same key to more than one place.

@@ -191,6 +191,38 @@ description: d
 scopes: [API]
 secret: {path: kv/llm/fc}
 `, "scopes: orkeys does not make fal keys"},
+		"weekly reset on elevenlabs": {"teams/chat-core/prod-chat-core-ea.yaml", `
+name: prod-chat-core-ea
+kind: production
+provider: elevenlabs
+env: prod
+service: ea
+description: d
+budget: {limit: 10, reset: weekly}
+ttl: 30d
+secret: {path: kv/llm/ea}
+`, "budget.reset: elevenlabs supports only monthly limits"},
+		"ttl over elevenlabs max": {"teams/chat-core/prod-chat-core-eb.yaml", `
+name: prod-chat-core-eb
+kind: production
+provider: elevenlabs
+env: prod
+service: eb
+description: d
+budget: {limit: 10}
+ttl: 91d
+secret: {path: kv/llm/eb}
+`, "ttl: more than 90d, the longest expiry of elevenlabs keys"},
+		"all scopes on elevenlabs": {"teams/chat-core/prod-chat-core-ec.yaml", `
+name: prod-chat-core-ec
+kind: production
+provider: elevenlabs
+env: prod
+service: ec
+description: d
+scopes: [all]
+secret: {path: kv/llm/ec}
+`, "scopes: permission all is not allowed"},
 		"import without name": {"teams/chat-core/prod-chat-core-i.yaml", `
 name: prod-chat-core-i
 kind: production

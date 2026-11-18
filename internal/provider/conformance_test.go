@@ -59,6 +59,18 @@ func TestContractFal(t *testing.T) {
 	providertest.Run(t, p)
 }
 
+func TestContractElevenLabs(t *testing.T) {
+	srv := httptest.NewServer(&memElevenLabs{})
+	t.Cleanup(srv.Close)
+	// 0.25 USD per credit converts the test limits to whole credits without rounding.
+	p, err := provider.New("elevenlabs", provider.Config{BaseURL: srv.URL, Key: "k", SelfID: "self",
+		Options: map[string]string{"service_account": "sa_1", "usd_per_credit": "0.25"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	providertest.Run(t, p)
+}
+
 func writeJSON(w http.ResponseWriter, v any) { _ = json.NewEncoder(w).Encode(v) }
 
 func decode(r *http.Request) map[string]any {
@@ -273,6 +285,79 @@ func (f *memFal) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		w.WriteHeader(http.StatusNoContent)
+	default:
+		w.WriteHeader(http.StatusNotFound)
+	}
+}
+
+type memElevenLabs struct {
+	mu   sync.Mutex
+	n    int
+	keys []map[string]any
+}
+
+func (f *memElevenLabs) find(id string) int {
+	for i, k := range f.keys {
+		if k["key_id"] == id {
+			return i
+		}
+	}
+	return -1
+}
+
+func (f *memElevenLabs) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	const base = "/v1/service-accounts/sa_1/api-keys"
+	rest, one := strings.CutPrefix(r.URL.Path, base+"/")
+	id, disable := strings.CutSuffix(rest, "/disable")
+	switch {
+	case r.Method == http.MethodGet && r.URL.Path == base:
+		keys := []map[string]any{}
+		keys = append(keys, f.keys...)
+		writeJSON(w, map[string]any{"api-keys": keys})
+	case r.Method == http.MethodPost && r.URL.Path == base:
+		in := decode(r)
+		f.n++
+		k := map[string]any{"key_id": fmt.Sprintf("k%d", f.n), "name": in["name"], "hint": "abcd", "service_account_user_id": "sa_1",
+			"hashed_xi_api_key": "h", "created_at_unix": time.Now().Unix(), "is_disabled": false, "permissions": in["permissions"],
+			"character_limit": in["character_limit"], "character_count": 0, "expires_at_unix": in["expires_at_unix"]}
+		f.keys = append(f.keys, k)
+		writeJSON(w, map[string]any{"xi-api-key": "sk_" + k["key_id"].(string), "key_id": k["key_id"]})
+	case one && disable && r.Method == http.MethodPost:
+		i := f.find(id)
+		if i < 0 {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		f.keys[i]["is_disabled"] = true
+		writeJSON(w, map[string]any{})
+	case one && r.Method == http.MethodPatch:
+		i := f.find(rest)
+		if i < 0 {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		for field, v := range decode(r) {
+			switch {
+			case field == "is_enabled":
+				f.keys[i]["is_disabled"] = v != true
+			case v == "clear":
+				f.keys[i][field] = nil
+			default:
+				f.keys[i][field] = v
+			}
+		}
+		writeJSON(w, map[string]any{})
+	case one && r.Method == http.MethodDelete:
+		i := f.find(rest)
+		if i < 0 {
+			w.WriteHeader(http.StatusNotFound)
+			writeJSON(w, map[string]any{"detail": map[string]any{"code": "not_found", "status": "workspace_api_key_not_found"}})
+			return
+		}
+		f.keys = append(f.keys[:i], f.keys[i+1:]...)
+		writeJSON(w, map[string]any{})
 	default:
 		w.WriteHeader(http.StatusNotFound)
 	}

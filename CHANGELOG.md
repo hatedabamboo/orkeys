@@ -1,5 +1,17 @@
 # CHANGELOG
 
+## v0.7.0 (2026-11-18)
+
+- (feat) Provider type `elevenlabs` for the API keys of one ElevenLabs service account. The management key needs the
+  permission `service_account_write`, and its owner needs the group permission `service_accounts_manage`. Set the
+  options `service_account` and `usd_per_credit`. orkeys creates, rotates, limits, disables and deletes the keys. It
+  converts `budget.limit` to credits with `usd_per_credit`. `budget.reset` is `monthly` only, because the limit resets
+  with the billing period. `ttl` is at most `90d`. orkeys does not enable a key that ElevenLabs disabled because the
+  key was public [faae434](https://github.com/hatedabamboo/orkeys/commit/faae4346e52f3a448fc3ce8bc39b3fff8cb7abf3)
+- (feat) `orkeys elevenlabs` (`el`) lists service accounts, and lists, shows, creates, updates, disables, enables and
+  deletes their keys. Limits and usage are in credits; `ELEVENLABS_USD_PER_CREDIT` adds USD. `disable` and `delete`
+  refuse the management key [faae434](https://github.com/hatedabamboo/orkeys/commit/faae4346e52f3a448fc3ce8bc39b3fff8cb7abf3)
+
 ## v0.6.0 (2026-11-18)
 
 - (feat) Provider type `fal` for fal.ai. The fal.ai API cannot create keys, so a person makes each key at fal.ai and

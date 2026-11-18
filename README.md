@@ -7,7 +7,7 @@
 `orkeys` (pronounced "ORKies") is an IaC for your LLM API keys. `orkeys` manages LLM API keys. It has two modes:
 
 - **Provider commands** manage keys at one provider directly: `orkeys openrouter` (`or`), `orkeys deepinfra` (`di`),
-  `orkeys openai` (`oa`) and `orkeys fal`.
+  `orkeys openai` (`oa`), `orkeys fal` and `orkeys elevenlabs` (`el`).
 - **Inventory mode** manages keys of all providers from an inventory repository, with state and secrets in Vault or
   AWS, rotation, alerts and self-service keys (see [Inventory mode](#inventory-mode)).
 
@@ -35,51 +35,53 @@ OpenRouter has full support. DeepInfra is read only: DeepInfra does not let an A
 delete tokens (see [DeepInfra](#deepinfra)). Each write to DeepInfra fails with `401`. OpenAI has no per-key limit and
 no disabled flag: orkeys creates, rotates and deletes OpenAI keys, and tracks their budget only in metrics (see
 [OpenAI](#openai)). The fal.ai API cannot create keys, and fal.ai has no per-key limit and no disabled flag: a person
-makes each fal.ai key, and orkeys delivers, tracks and revokes it (see [fal.ai](#falai)).
+makes each fal.ai key, and orkeys delivers, tracks and revokes it (see [fal.ai](#falai)). ElevenLabs has full support
+for the keys of one service account. Its limits are in credits: orkeys converts them with a price per credit, and the
+limit period is the billing period of the workspace (see [ElevenLabs](#elevenlabs)).
 
 ### Support in provider commands
 
-| Feature | OpenRouter (`or`) | DeepInfra (`di`) | OpenAI (`oa`) | fal.ai (`fal`) |
-|---|---|---|---|---|
-| List keys (`list`) | yes | yes. No scopes and no creation time | yes. Keys of users and service accounts | yes |
-| Show one key (`get`) | yes | yes | yes | yes |
-| Create a key (`create`) | yes | no | yes. One service account per key | no. fal.ai refuses it with `403` |
-| Change the limit (`update --limit`) | yes | no | no per-key limit | no per-key limit |
-| Limit period (`--limit-reset`) | `daily`, `weekly`, `monthly` | `monthly` only | no per-key limit | no per-key limit |
-| Expiry (`--expires`) | yes | no | yes. At most 365d | yes. At most 365d |
-| Rename (`update --name`) | yes | no | no | no |
-| Change scopes (`update --scopes`) | no scopes | no | yes | no. Preset or permissions only at create |
-| List possible scopes (`scopes`) | no scopes | yes | no | no |
-| Disable a key (`disable`) | yes | no | no | no |
-| Enable a key (`enable`) | yes | no command | no | no |
-| Delete a key (`delete`) | yes | no | yes | yes. A revoke cannot be undone |
-| Workspaces (`--workspace`) | yes | no | one project per call (`--project`), required | the workspace of the key |
-| Spend shown | day, week, month, total | month | day, week, month | day, week, month. An estimate |
-| Last use shown | yes | no | yes | no |
+| Feature | OpenRouter (`or`) | DeepInfra (`di`) | OpenAI (`oa`) | fal.ai (`fal`) | ElevenLabs (`el`) |
+|---|---|---|---|---|---|
+| List keys (`list`) | yes | yes. No scopes and no creation time | yes. Keys of users and service accounts | yes | yes. Keys of one service account. `service-accounts` lists the accounts |
+| Show one key (`get`) | yes | yes | yes | yes | yes |
+| Create a key (`create`) | yes | no | yes. One service account per key | no. fal.ai refuses it with `403` | yes |
+| Change the limit (`update --limit`) | yes | no | no per-key limit | no per-key limit | yes (`update --credit-limit`). In credits |
+| Limit period (`--limit-reset`) | `daily`, `weekly`, `monthly` | `monthly` only | no per-key limit | no per-key limit | `monthly` only. The billing period |
+| Expiry (`--expires`) | yes | no | yes. At most 365d | yes. At most 365d | yes. 15m to 90d |
+| Rename (`update --name`) | yes | no | no | no | yes |
+| Change scopes (`update --scopes`) | no scopes | no | yes | no. Preset or permissions only at create | yes |
+| List possible scopes (`scopes`) | no scopes | yes | no | no | no |
+| Disable a key (`disable`) | yes | no | no | no | yes |
+| Enable a key (`enable`) | yes | no command | no | no | yes. Not a key that ElevenLabs found in public |
+| Delete a key (`delete`) | yes | no | yes | yes. A revoke cannot be undone | yes |
+| Workspaces (`--workspace`) | yes | no | one project per call (`--project`), required | the workspace of the key | one service account per call (`--service-account`), required |
+| Spend shown | day, week, month, total | month | day, week, month | day, week, month. An estimate | credits used in the billing period. USD with `ELEVENLABS_USD_PER_CREDIT` |
+| Last use shown | yes | no | yes | no | no |
 
 ### Support in inventory mode
 
-| Feature | OpenRouter | DeepInfra | OpenAI | fal.ai |
-|---|---|---|---|---|
-| `validate`, `state` | yes | yes | yes | yes |
-| `plan` | yes | yes | yes | yes |
-| `apply`: create a key | yes | no | yes | no. A person makes the key and writes it with `orkeys put` |
-| `apply`: set the limit | yes | no | no. The budget is only a metric | no. The budget is only a metric |
-| `apply`: `disabled: true` | yes. Sets the disabled flag | no | no. `validate` rejects it | no. `validate` rejects it |
-| `apply`: revoke a deleted manifest | yes | no | yes | yes |
-| `budget.reset` | `daily`, `weekly`, `monthly` | `monthly` only | `daily`, `weekly`, `monthly`. Only a metric | `daily`, `weekly`, `monthly`. Only a metric |
-| `scopes` field | no | yes. Used only at create | yes. Used only at create | no. A person sets the permissions at fal.ai |
-| `rotate` | yes. The key also has a native expiry | no | yes. The key also has a native expiry. `ttl` at most 365d | by hand: reminders, then `orkeys put`. `rotate` syncs the consumers and revokes the old key |
-| `request`, `revoke` | yes | no | yes | no |
-| `import`: print manifests | yes | yes | yes | yes |
-| `apply`: adopt an `import` key | yes | no | yes | no. Write the key to `secret`; orkeys reads the key ID from the value |
-| `apply`: track a key (`track_only: true`) | yes | yes | yes | yes |
-| `hygiene`: revoke keys of people who left | yes | no | yes | no. No requested keys |
-| `hygiene`: find unused keys | yes | no. DeepInfra has no last use | yes | no. fal.ai has no last use |
-| `exporter`: spend | yes | yes. Spend this month only | yes | yes. An estimate |
-| `exporter`: hard limit | yes | yes | no. Budget only | no. Budget only |
-| `exporter`: last use | yes | no | yes | no |
-| Old key "still in use" check at revoke | total usage | spend this month | last use (exact), spend this month | spend this month (an estimate) |
+| Feature | OpenRouter | DeepInfra | OpenAI | fal.ai | ElevenLabs |
+|---|---|---|---|---|---|
+| `validate`, `state` | yes | yes | yes | yes | yes |
+| `plan` | yes | yes | yes | yes | yes |
+| `apply`: create a key | yes | no | yes | no. A person makes the key and writes it with `orkeys put` | yes |
+| `apply`: set the limit | yes | no | no. The budget is only a metric | no. The budget is only a metric | yes. In credits: `budget.limit` / `usd_per_credit`, rounded down |
+| `apply`: `disabled: true` | yes. Sets the disabled flag | no | no. `validate` rejects it | no. `validate` rejects it | yes. Disables the key |
+| `apply`: revoke a deleted manifest | yes | no | yes | yes | yes |
+| `budget.reset` | `daily`, `weekly`, `monthly` | `monthly` only | `daily`, `weekly`, `monthly`. Only a metric | `daily`, `weekly`, `monthly`. Only a metric | `monthly` only. The billing period |
+| `scopes` field | no | yes. Used only at create | yes. Used only at create | no. A person sets the permissions at fal.ai | yes. Used only at create |
+| `rotate` | yes. The key also has a native expiry | no | yes. The key also has a native expiry. `ttl` at most 365d | by hand: reminders, then `orkeys put`. `rotate` syncs the consumers and revokes the old key | yes. The key also has a native expiry. `ttl` at most 90d |
+| `request`, `revoke` | yes | no | yes | no | yes |
+| `import`: print manifests | yes | yes | yes | yes | yes |
+| `apply`: adopt an `import` key | yes | no | yes | no. Write the key to `secret`; orkeys reads the key ID from the value | yes |
+| `apply`: track a key (`track_only: true`) | yes | yes | yes | yes | yes |
+| `hygiene`: revoke keys of people who left | yes | no | yes | no. No requested keys | yes |
+| `hygiene`: find unused keys | yes | no. DeepInfra has no last use | yes | no. fal.ai has no last use | no. ElevenLabs has no last use |
+| `exporter`: spend | yes | yes. Spend this month only | yes | yes. An estimate | yes. Billing period only, converted from credits |
+| `exporter`: hard limit | yes | yes | no. Budget only | no. Budget only | yes |
+| `exporter`: last use | yes | no | yes | no | no |
+| Old key "still in use" check at revoke | total usage | spend this month | last use (exact), spend this month | spend this month (an estimate) | spend in the billing period |
 
 A provider of type `void` has no API. orkeys tracks the expiry of its keys and delivers the values that a person
 enters. See [Keys without an API](#keys-without-an-api).
@@ -268,6 +270,101 @@ consumers:
     restart: [deployment/media-api]
 ```
 
+### ElevenLabs
+
+Limits first:
+
+- Service accounts are only for multi-seat workspaces, and only a workspace admin can manage them.
+- A new service account has no access to the resources of the workspace (voices, projects, agents). Add it to a
+  group, or share the resources with it. Its keys can then use them.
+- To create, change and delete keys, orkeys needs two permissions. Without them, a key can only list the service
+  accounts and their keys.
+  - The management key needs the permission `service_account_write`. Without it, ElevenLabs answers `401` with
+    `missing_permissions`.
+  - The owner of the management key needs the group permission `service_accounts_manage`. For a key of a service
+    account, add that service account to a workspace group with this permission. Without it, ElevenLabs answers `403`
+    with `missing_group_permissions`.
+
+orkeys manages the API keys of one service account through the
+[service account API](https://elevenlabs.io/docs/api-reference/service-accounts/api-keys/create). The keys of a
+service account call the models like personal keys. Their permissions set what they can do.
+
+`orkeys elevenlabs` (alias `el`) manages the keys of one service account directly. It shows limits and usage in
+credits. With `ELEVENLABS_USD_PER_CREDIT`, it also shows them in USD.
+
+| Variable | Required | Purpose |
+|---|---|---|
+| `ELEVENLABS_ADMIN_KEY` | yes | Management key |
+| `ELEVENLABS_SERVICE_ACCOUNT` | yes, except for `service-accounts` | `service_account_user_id`. Same as `--service-account` (`-s`) |
+| `ELEVENLABS_API_BASE` | no | API base URL. Default: `https://api.elevenlabs.io` |
+| `ELEVENLABS_USD_PER_CREDIT` | no | Price of one credit. Adds spend and limit in USD to the output |
+
+```sh
+orkeys el service-accounts              # find the service_account_user_id
+orkeys el list                          # keys with credits used and the credit limit
+orkeys el list -o wide                  # with hint, creation time and permissions
+orkeys el get ci                        # also the disable reason and allowed IPs
+orkeys el create --name ci --expires 30d --credit-limit 100000
+orkeys el create --name stt --scopes speech_to_text
+KEY=$(orkeys el create --name tmp --expires 1h -q)   # print only the secret
+orkeys el update ci --credit-limit none --expires 60d
+orkeys el update ci --name ci-old --scopes text_to_speech
+orkeys el disable ci
+orkeys el enable ci
+orkeys el delete ci -y
+```
+
+Commands that take `<key>` accept a key ID or an exact key name. In inventory mode, the same keys are available
+with `orkeys keys -p <provider>`.
+
+Set up:
+
+1. Create a service account (ElevenLabs dashboard, or `POST /v1/service-accounts`). Give it access to the resources
+   that the keys need. Copy its `service_account_user_id`.
+2. Make a management key with the permission `service_account_write`. Its owner needs the group permission
+   `service_accounts_manage`. Write the key to the `management_key` secret, or set `ORKEYS_<NAME>_KEY`.
+3. Add the provider to `policy.yaml`:
+
+```yaml
+providers:
+  - name: elevenlabs
+    kind: elevenlabs
+    management_key: secret/orkeys/providers/elevenlabs
+    options:
+      service_account: sa_abc123                         # the service account that holds the keys
+      usd_per_credit: "0.00018"                          # price of one credit in your plan
+```
+
+| Option | Required | Purpose |
+|---|---|---|
+| `service_account` | yes | `service_account_user_id` of the service account. `workspace` also works |
+| `usd_per_credit` | yes | Price of one credit in USD. orkeys uses it to convert `budget.limit` to credits, and the credits used to spend. Example: 500,000 credits for $99 is `0.000198` |
+
+Limits of the ElevenLabs API:
+
+- The key limit (`character_limit`) is in credits. orkeys sets `budget.limit / usd_per_credit` credits, rounded
+  down. The spend that orkeys shows is credits used × `usd_per_credit`. It is correct only when the price matches
+  your plan. Credits of a usage-based overage can cost more.
+- The API docs also call the limit "characters". It counts credits: the same text costs a different number of credits
+  with each model.
+- The credits used (`character_count`) change about one minute after a request. A request over the limit fails with
+  `401` and `quota_exceeded`. A client can take this for a bad key.
+- The limit and the spend reset at the start of the billing period of the workspace, not on the 1st of the month. So
+  `budget.reset` is `monthly` only. Spend per day and per week is not available.
+- ElevenLabs has no last use, so `hygiene` cannot find unused keys.
+- The expiry is 15 minutes to 90 days from now. A workspace can refuse keys that never expire. Then set `ttl` on
+  every key.
+- In inventory mode, orkeys does not rename a key or change its permissions after create. `orkeys el update` can.
+- `scopes` is a list of permissions, for example `[text_to_speech, voices_read]`. The default is
+  `[text_to_speech, speech_to_speech, speech_to_text, voices_read, models_read]`. orkeys refuses `all`,
+  `service_account_write`, `create_user_api_key`, `group_members_manage`, `workspace_members_invite`,
+  `workspace_members_remove` and `workspace_write`, because a key with them can make keys or add members.
+- orkeys finds the management key in the list from the hash of its value (`hashed_xi_api_key` is its SHA-256), so
+  `self_id` is not necessary. The management key does not show as unmanaged, and `orkeys el disable` and `delete`
+  refuse it.
+- ElevenLabs disables a key that it finds in public (`disable_reason: exposed_publicly`). orkeys refuses to enable
+  such a key, also with `track_disabled: true`: `apply` and `orkeys el enable` fail for it. Rotate the key (`orkeys rotate --now <name>`).
+
 Run `orkeys <provider> <command> --help` to see all flags.
 
 ### Output
@@ -281,7 +378,7 @@ JSON output holds the full API objects. `create --json` includes the secret in `
 |---|---|
 | `--limit` | USD amount, or `none` to remove the limit |
 | `--limit-reset` | OpenRouter only: `daily`, `weekly`, `monthly` or `none`. Resets happen at midnight UTC |
-| `--expires` | OpenRouter, OpenAI and fal.ai: duration (`30d`, `2w`, `12h`), date (`2027-12-31`, midnight UTC) or RFC 3339 |
+| `--expires` | OpenRouter, OpenAI, fal.ai and ElevenLabs: duration (`30d`, `2w`, `12h`), date (`2027-12-31`, midnight UTC) or RFC 3339 |
 
 ### Behavior
 
@@ -398,10 +495,10 @@ Unknown fields are errors, so a typo does not pass silently.
 | `secrets` | `vault` | Secrets store: `vault` or `aws` (Secrets Manager) |
 | `providers[]` | | Provider accounts. A list of `{name, kind, ...}`, or a map from name to config. See [Providers](#providers) |
 | `providers[].name` | | Name used in manifests (`provider:`), kinds, state and metrics. Matches `^[a-z][a-z0-9-]*$` |
-| `providers[].kind` | the name | Provider type: `openrouter`, `deepinfra`, `openai`, `fal` or `void` (no API, see [Keys without an API](#keys-without-an-api)) |
+| `providers[].kind` | the name | Provider type: `openrouter`, `deepinfra`, `openai`, `fal`, `elevenlabs` or `void` (no API, see [Keys without an API](#keys-without-an-api)) |
 | `providers[].management_key` | | Secret path with field `key` (and optional `self_id`, `workspace`, `base_url`, and the provider options). Optional if `ORKEYS_<NAME>_KEY` is set |
-| `providers[].workspace`, `base_url` | | OpenRouter workspace or OpenAI project ID; API base URL |
-| `providers[].options` | | Settings of the provider. All types: `report_unmanaged`, `ignore_disabled`, `ignore_unmanaged` (see [Keys without a manifest](#keys-without-a-manifest)) and `track_only` (see [Tracking a key](#tracking-a-key)). `openai`: `project` (the project ID, required here or in `workspace`). `void`: `console` (the vendor page for keys; events show it). Unknown options are errors |
+| `providers[].workspace`, `base_url` | | OpenRouter workspace, OpenAI project ID or ElevenLabs service account; API base URL |
+| `providers[].options` | | Settings of the provider. All types: `report_unmanaged`, `ignore_disabled`, `ignore_unmanaged` (see [Keys without a manifest](#keys-without-a-manifest)) and `track_only` (see [Tracking a key](#tracking-a-key)). `openai`: `project` (the project ID, required here or in `workspace`). `elevenlabs`: `service_account` (required here or in `workspace`) and `usd_per_credit` (required), see [ElevenLabs](#elevenlabs). `void`: `console` (the vendor page for keys; events show it). Unknown options are errors |
 | `envs` | `[prod, staging, dev]` | Allowed `env` values of manifests |
 | `name_prefix` | `{env}-{team}-` | Required start of key names. `{env}` and `{team}` are replaced. `""` turns the check off |
 | `naming` | `^[a-z0-9][a-z0-9._-]*$` | Regex that every key name must match |
@@ -433,6 +530,11 @@ providers:
       project: proj_abc123                             # the project that holds the keys
   - name: fal
     management_key: secret/orkeys/providers/fal        # lists, reads spend and revokes; cannot create
+  - name: elevenlabs
+    management_key: secret/orkeys/providers/elevenlabs
+    options:
+      service_account: sa_abc123                       # the service account that holds the keys
+      usd_per_credit: "0.00018"                        # converts budgets and spend to and from credits
 ```
 
 The map form still works. The map key is the name, and the kind defaults to it:
@@ -546,10 +648,10 @@ service (Alertmanager, a CI step, a bot) can route them.
 | `env` | yes | One of `envs` |
 | `service` | no | Free text; exported as a metric label |
 | `description` | yes | |
-| `scopes` | no | DeepInfra, OpenAI and fal.ai. DeepInfra default: `[inference]`; `unrestricted` is not allowed. OpenAI default: all permissions of the service account; for example `[api.all.read]`. fal.ai: one preset or a list of permissions, default `[API]`; `FULL` and `auth:keys:*` other than `auth:keys:read` are not allowed |
-| `budget.limit` | no | Limit in USD at the provider; the provider blocks the key when spend in the period reaches it. OpenAI and fal.ai have no per-key limit: orkeys only exports the budget as a metric. Default: the kind `budget.limit`. Up to the kind `max_limit`. Not allowed for `void` providers |
+| `scopes` | no | DeepInfra, OpenAI, fal.ai and ElevenLabs. DeepInfra default: `[inference]`; `unrestricted` is not allowed. OpenAI default: all permissions of the service account; for example `[api.all.read]`. fal.ai: one preset or a list of permissions, default `[API]`; `FULL` and `auth:keys:*` other than `auth:keys:read` are not allowed. ElevenLabs: a list of permissions, default `[text_to_speech, speech_to_speech, speech_to_text, voices_read, models_read]`; `all` and the permissions that manage keys, members or the workspace are not allowed |
+| `budget.limit` | no | Limit in USD at the provider; the provider blocks the key when spend in the period reaches it. OpenAI and fal.ai have no per-key limit: orkeys only exports the budget as a metric. ElevenLabs: converted to credits with `usd_per_credit`. Default: the kind `budget.limit`. Up to the kind `max_limit`. Not allowed for `void` providers |
 | `budget.reset` | no | Limit period: `daily`, `weekly`, `monthly` (DeepInfra: monthly only). Default: the kind `budget.reset` |
-| `ttl` | no | `90d`, `2w`, `24h`. Default and maximum: the kind `ttl`. OpenAI and fal.ai: at most `365d` |
+| `ttl` | no | `90d`, `2w`, `24h`. Default and maximum: the kind `ttl`. OpenAI and fal.ai: at most `365d`. ElevenLabs: at most `90d` |
 | `secret.path`, `secret.field` | path: yes, except with `track_only: true` or a `void` provider | Where the key goes. Vault: `<mount>/<path>`; AWS: secret name. Field default `api_key`. Other fields in the same secret are kept. `secret` is one mapping or a list of mappings: orkeys writes the same key to each place. Two keys can share a path, not a path and field |
 | `consumers[]` | no | `type` (`eso`, `direct` or `github`). For `eso` and `direct`: `cluster`, `namespace`, `externalsecret` (eso), `restart` (`deployment/x`, `statefulset/x`, `daemonset/x`, `cronjob/x`). orkeys restarts only what `restart` lists. For `github`: `repo` (`owner/repo`) or `org`, `environment` (repo only), `name`, `visibility` (org only: `private` (default) or `all`), `workflows` (repo only: a list of `{workflow, ref, inputs}` to run after each write). See [GitHub Actions secrets](#github-actions-secrets). A field of another type is an error |
 | `import.id`, `import.name` | no | Adopt an existing provider key instead of creating one. `name` is its current name at the provider. See below |
@@ -669,7 +771,7 @@ The token needs "Actions: read and write" on the repository, in addition to "Sec
 #### Disabling a key
 
 Set `disabled: true` in the manifest to stop a key and keep its state and secret. `plan` shows `disable`, and `apply`
-disables the key at the provider (`key_disabled` event). OpenRouter has a disabled flag. DeepInfra has none, so orkeys
+disables the key at the provider (`key_disabled` event). OpenRouter and ElevenLabs have a disabled flag. DeepInfra has none, so orkeys
 sets the limit to 0. OpenAI and fal.ai have neither, so `validate` rejects `disabled: true` on their keys; delete the
 manifest to revoke the key. A new or imported key with `disabled: true` is disabled right after `apply` creates or adopts it.
 
@@ -909,9 +1011,9 @@ providers:
       report_unmanaged: false                # other teams make keys in this project
 ```
 
-The key ID is the OpenRouter key `hash`, the DeepInfra token ID, the OpenAI key ID or the fal.ai `key_id`. `orkeys keys -p <provider> list`
+The key ID is the OpenRouter key `hash`, the DeepInfra token ID, the OpenAI key ID, the fal.ai `key_id` or the ElevenLabs `key_id`. `orkeys keys -p <provider> list`
 and the `plan` output show it. A disabled key is an OpenRouter key with the disabled flag, a DeepInfra key with a
-limit of 0, or an OpenAI key with inactive project access.
+limit of 0, an OpenAI key with inactive project access, or an ElevenLabs key with `is_disabled`.
 
 `plan` shows a warning for an ID in `ignore_unmanaged` that is not at the provider or that has state. Remove such
 entries.
@@ -1075,7 +1177,7 @@ races with a takeover of an expired lock can remove the new holder's lock.
    store themselves) get no force-sync, only their `restart` targets. CronJobs are not restarted; the next run reads
    the new secret. `github` consumers get the new key written to their GitHub Actions secrets, and orkeys starts their `workflows`.
 3. 15 minutes after the switch, a `rotate` run records the old key's usage (total usage on OpenRouter, spend this
-   month on DeepInfra, OpenAI and fal.ai). OpenAI reports spend with a delay, so use a `revoke_grace` of at least 24h
+   month on DeepInfra, OpenAI and fal.ai, spend in the billing period on ElevenLabs). OpenAI reports spend with a delay, so use a `revoke_grace` of at least 24h
    for OpenAI keys. fal.ai does not document the delay of its usage estimate: use at least 24h for fal.ai keys too.
    After `revoke_grace` (24h), `rotate` compares it again. If the usage grew, a consumer still has
    the old key: orkeys does not revoke it and marks the rotation as failed. For OpenAI keys a last use after the
@@ -1086,7 +1188,7 @@ races with a takeover of an expired lock can remove the new holder's lock.
    active until then. `--retry` syncs the consumers again and starts a new wait: the usage check of step 3 records a
    new baseline. Only spend after the retry counts.
 
-OpenRouter and OpenAI keys also get a native expiry at `ttl`. DeepInfra keys have none; orkeys revokes them itself.
+OpenRouter, OpenAI and ElevenLabs keys also get a native expiry at `ttl`. DeepInfra keys have none; orkeys revokes them itself.
 A fal.ai key has the expiry that the person set at fal.ai, if any.
 
 ### Requested keys
@@ -1154,7 +1256,7 @@ fal.ai keys this rule is the only control of spend: these providers do not stop 
 | `orkeys_key_spend_usd` | Spend in the current limit period (`reset`: today, this week or this month) |
 | `orkeys_key_budget_usd` | `budget.limit` from the manifest for the same period. Not for `void` keys |
 | `orkeys_key_hard_limit_usd` | Limit that the provider reports for the same period. A limit changed outside orkeys shows here, and differs from `orkeys_key_budget_usd`. No series for a key without a limit at the provider, and for providers without a per-key limit (OpenAI, fal.ai). A key missing at the provider shows `budget.limit` |
-| `orkeys_key_usage_usd_total` | Counter of the key usage in USD, as the provider reports it. Use `increase()` or `rate()`. It resets at each rotation; DeepInfra, OpenAI and fal.ai also reset it at the start of each month. OpenAI data is hours late |
+| `orkeys_key_usage_usd_total` | Counter of the key usage in USD, as the provider reports it. Use `increase()` or `rate()`. It resets at each rotation; DeepInfra, OpenAI and fal.ai also reset it at the start of each month, ElevenLabs at the start of each billing period. OpenAI data is hours late |
 | `orkeys_key_expires_timestamp_seconds` | Expiry. Not for a tracked key without a provider expiry |
 | `orkeys_key_last_used_timestamp_seconds` | Last use (OpenRouter and OpenAI). OpenRouter reports the request time for recently used keys, so treat it as "recently used", not as an exact time |
 | `orkeys_key_created_timestamp_seconds` | Creation time of the key at the provider. When the provider does not report it: the time when orkeys created or adopted the key |
@@ -1200,6 +1302,7 @@ Layout:
 | `internal/deepinfra` | HTTP client for DeepInfra API tokens and key limits |
 | `internal/openai` | HTTP client for the OpenAI Admin API: project keys, service accounts, costs |
 | `internal/fal` | HTTP client for the fal.ai Platform API: keys, usage |
+| `internal/elevenlabs` | HTTP client for the API keys of an ElevenLabs service account |
 | `internal/spend` | spend per key in the current UTC day, week and month, from daily costs (OpenAI, fal.ai) |
 | `internal/httpx` | JSON over HTTP with retries: reads on network errors, 408, 429 and 5xx; writes on 429 |
 | `internal/nullable` | request fields that are absent, null or set |
@@ -1211,7 +1314,7 @@ Layout:
 | `internal/engine` | plan, apply, rotate, request, issued, revoke, state listing, hygiene, import; consumer drivers in `consumers.go`, recovery in `recover.go`, `void` keys and `put` in `void.go` |
 | `internal/exporter` | Prometheus metrics |
 | `internal/kube`, `internal/deliver`, `internal/github` | kubectl, age delivery, org membership, Actions secrets |
-| `internal/cli` | cobra commands: `openrouter.go`, `deepinfra.go`, `openai.go`, `fal.go`, `keys.go`, `inventory.go`, `put.go`, `exporter_cmd.go`; wiring in `wire.go`, output in `render.go`, event webhook in `webhook.go`, log setup in `logging.go` |
+| `internal/cli` | cobra commands: `openrouter.go`, `deepinfra.go`, `openai.go`, `fal.go`, `elevenlabs.go`, `keys.go`, `inventory.go`, `put.go`, `exporter_cmd.go`; wiring in `wire.go`, output in `render.go`, event webhook in `webhook.go`, log setup in `logging.go` |
 | `examples/inventory` | example inventory repository with rotate and hygiene workflows; a test keeps it valid |
 | `internal/values` | input parsing and formatting |
 
