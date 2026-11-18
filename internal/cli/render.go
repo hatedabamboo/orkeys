@@ -97,13 +97,24 @@ func writeImportStubs(w io.Writer, cands []engine.Candidate, trackOnly bool) {
 			info = append(info, fmt.Sprintf("$%.2f this month", *k.SpendMonthUSD))
 		}
 		fmt.Fprintf(w, "# %s key %q: %s\n", c.Provider, k.Name, strings.Join(info, ", "))
-		if !trackOnly {
-			fmt.Fprintf(w, "# Write the current key value to secret.path first. Save as teams/<team>/<name>.yaml.\n")
-		} else {
+		// A managed key of a provider that cannot create keys has no import block. The value in the secret names it.
+		byHand := c.ByHand && !trackOnly
+		switch {
+		case trackOnly:
 			fmt.Fprintf(w, "# Save as teams/<team>/<name>.yaml. orkeys exports the spend and does not change the key.\n")
+		case byHand:
+			fmt.Fprintf(w, "# Write the current key value to secret.path first, or run orkeys put after apply. Save as teams/<team>/<name>.yaml.\n")
+		default:
+			fmt.Fprintf(w, "# Write the current key value to secret.path first. Save as teams/<team>/<name>.yaml.\n")
 		}
 		fmt.Fprintf(w, "name: TODO\nkind: TODO\nprovider: %s\nenv: TODO\ndescription: TODO\n", c.Provider)
-		fmt.Fprintf(w, "import:\n  id: %s\n  name: %s\n", k.ID, yamlString(k.Name))
+		switch {
+		case byHand && !k.CreatedAt.IsZero():
+			fmt.Fprintf(w, "issued: %s\n", k.CreatedAt.Format(time.DateOnly))
+		case byHand:
+		default:
+			fmt.Fprintf(w, "import:\n  id: %s\n  name: %s\n", k.ID, yamlString(k.Name))
+		}
 		if trackOnly {
 			fmt.Fprintf(w, "track_only: true\n")
 		}

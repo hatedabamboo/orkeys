@@ -130,6 +130,19 @@ func (e *Engine) applyOne(ctx context.Context, a Action) error {
 
 	case ActDelete:
 		return e.remove(ctx, a.State, "manifest removed")
+
+	case ActRegister:
+		return e.register(ctx, a.Key)
+
+	case ActMoveSecret:
+		return e.moveSecret(ctx, a.Key, a.State)
+
+	case ActAdoptValue:
+		return e.adoptValue(ctx, a.Key, a.State)
+
+	case ActSetDates:
+		setDates(a.State, a.Key, e.issuedFor(a.Key, a.State, false))
+		return e.putState(ctx, a.State)
 	}
 	return fmt.Errorf("unknown action %q", a.Type)
 }
@@ -150,8 +163,16 @@ func (e *Engine) remove(ctx context.Context, st *state.State, reason string) err
 			return err
 		}
 	}
+	// orkeys cannot revoke a void key. voidRemoved tells a person to do it.
+	manual := e.manual(st.Provider)
 	var errs []error
+	seen := map[string]bool{}
 	for _, id := range st.KnownIDs() {
+		// A key that a person makes has no ID until it has a value. A moved value is in the list twice.
+		if manual || id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
 		if err := e.revoke(ctx, st.Provider, id); err != nil {
 			errs = append(errs, err)
 		}
@@ -167,6 +188,10 @@ func (e *Engine) remove(ctx context.Context, st *state.State, reason string) err
 	}
 	if err := e.State.DeleteState(ctx, st.Name); err != nil {
 		return err
+	}
+	if manual {
+		e.voidRemoved(st, reason)
+		return nil
 	}
 	e.emit(st, LevelInfo, EventKeyRevoked, "key revoked: %s", reason)
 	return nil

@@ -33,9 +33,17 @@ func (f *falAI) SelfID() string { return f.selfID }
 
 // fal.ai has no per-key limit. LimitReset is true because orkeys computes the spend per day, week and month from
 // the usage endpoint, so a budget of any period can be tracked in metrics.
-var falCaps = Caps{NativeExpiry: true, LimitReset: true, Scopes: true, MaxExpiry: fal.MaxExpiry}
+// The API refuses POST /keys with 403 "required 'auth:keys:create'", also for a key with the FULL preset, and the
+// dashboard cannot grant that permission. So a person makes the keys (ManualCreate). List, usage and revoke work.
+var falCaps = Caps{NativeExpiry: true, LimitReset: true, Scopes: true, MaxExpiry: fal.MaxExpiry, ManualCreate: true}
+
+// falOptions are the options of fal. console is the page where a person makes keys. Reminders show it.
+var falOptions = []string{OptConsole}
 
 func (f *falAI) Caps() Caps { return falCaps }
+
+// KeyIDOf returns the key ID of a fal.ai key value: the part before the colon of key_id:key_secret.
+func (f *falAI) KeyIDOf(value string) string { return fal.KeyID(value) }
 
 func (f *falAI) List(ctx context.Context) ([]Key, error) {
 	keys, err := f.c.ListKeys(ctx)

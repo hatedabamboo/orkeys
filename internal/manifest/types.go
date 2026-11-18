@@ -50,6 +50,36 @@ func (d *Duration) UnmarshalYAML(n *yaml.Node) error {
 
 func (d Duration) MarshalYAML() (any, error) { return values.Days(d.Duration), nil }
 
+// Date is a day in UTC, written as YYYY-MM-DD.
+type Date struct {
+	time.Time
+}
+
+func (d *Date) UnmarshalYAML(n *yaml.Node) error {
+	if n.Kind != yaml.ScalarNode {
+		return fmt.Errorf("line %d: want a date YYYY-MM-DD", n.Line)
+	}
+	t, err := time.Parse(time.DateOnly, n.Value)
+	if err != nil {
+		return fmt.Errorf("line %d: want a date YYYY-MM-DD, got %q", n.Line, n.Value)
+	}
+	d.Time = t
+	return nil
+}
+
+func (d Date) MarshalYAML() (any, error) { return d.String(), nil }
+
+// IsZero reports whether the date is not set. yaml omitempty uses it.
+func (d Date) IsZero() bool { return d.Time.IsZero() }
+
+// String returns the date as YYYY-MM-DD, or "" when it is not set.
+func (d Date) String() string {
+	if d.IsZero() {
+		return ""
+	}
+	return d.Format(time.DateOnly)
+}
+
 type Policy struct {
 	Naming     string                   `yaml:"naming"`
 	Kinds      map[string]*KindPolicy   `yaml:"kinds"`
@@ -240,6 +270,25 @@ func (p *Policy) ProviderKind(name string) string {
 	return name
 }
 
+// Manual reports whether provider name has no API (provider type void). A person makes its keys at the vendor.
+func (p *Policy) Manual(name string) bool {
+	info, ok := provider.Lookup(p.ProviderKind(name))
+	return ok && info.Caps.Manual
+}
+
+// ManualCreate reports whether the API of provider name cannot create keys (fal). A person makes its keys at the
+// vendor, and orkeys revokes them through the API.
+func (p *Policy) ManualCreate(name string) bool {
+	info, ok := provider.Lookup(p.ProviderKind(name))
+	return ok && info.Caps.ManualCreate
+}
+
+// ByHand reports whether a person makes the keys of provider name: Manual or ManualCreate.
+func (p *Policy) ByHand(name string) bool {
+	info, ok := provider.Lookup(p.ProviderKind(name))
+	return ok && info.Caps.ByHand()
+}
+
 type ProviderConfig struct {
 	// Name is the provider name used in manifests, state and metrics. Kind is its type.
 	Name          string          `yaml:"name"`
@@ -370,6 +419,9 @@ type Key struct {
 	TTL       Duration   `yaml:"ttl"`
 	Secrets   Secrets    `yaml:"secret,omitempty"`
 	Consumers []Consumer `yaml:"consumers,omitempty"`
+	// Issued is the date when the vendor made the current value of a void key. A change of it tells apply that
+	// the secret holds a new value. Zero means not set.
+	Issued Date `yaml:"issued,omitempty"`
 
 	Team string `yaml:"-"`
 	Path string `yaml:"-"`

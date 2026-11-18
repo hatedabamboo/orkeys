@@ -64,7 +64,7 @@ Remove a lock only when no orkeys run holds it. An expired lock is taken over au
 func (a *app) inventoryCmds() []*cobra.Command {
 	return []*cobra.Command{
 		a.unlockCmd(),
-		a.validateCmd(), a.planCmd(), a.applyCmd(), a.rotateCmd(),
+		a.validateCmd(), a.planCmd(), a.applyCmd(), a.rotateCmd(), a.putCmd(),
 		a.requestCmd(), a.issuedCmd(), a.revokeCmd(), a.stateCmd(),
 		a.importCmd(), a.hygieneCmd(), a.exporterCmd(),
 	}

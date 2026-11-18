@@ -148,6 +148,10 @@ func TestProviderFromSecrets(t *testing.T) {
 	if _, err := providerFromSecrets(ctx, sec, "openrouter-x", manifest.ProviderConfig{ManagementKey: "missing"}, time.Second); err == nil || !strings.Contains(err.Error(), "ORKEYS_OPENROUTER_X_KEY") {
 		t.Fatalf("env var name with dash: %v", err)
 	}
+	// A void provider has no management key. It needs no secrets store.
+	if p, err := providerFromSecrets(ctx, nil, "tts", manifest.ProviderConfig{Kind: "void"}, time.Second); err != nil || !p.Caps().Manual {
+		t.Fatalf("void provider: %v", err)
+	}
 }
 
 func TestResolveExporterConfig(t *testing.T) {
@@ -264,6 +268,15 @@ func TestRenderPlanMarkdownAndImportStubs(t *testing.T) {
 	out = b.String()
 	if !strings.Contains(out, "track_only: true\nbudget:\n  reset: monthly\n  limit: 50\n") || strings.Contains(out, "secret:") {
 		t.Errorf("track stub:\n%s", out)
+	}
+	b.Reset()
+	created := time.Date(2026, 10, 15, 17, 59, 0, 0, time.UTC)
+	writeImportStubs(&b, []engine.Candidate{
+		{Provider: "fal", ByHand: true, Key: &provider.Key{ID: "fal_sk_1", Name: "prod", CreatedAt: created}},
+	}, false)
+	out = b.String()
+	if !strings.Contains(out, "issued: 2026-10-15\n") || strings.Contains(out, "import:") || !strings.Contains(out, "orkeys put") {
+		t.Errorf("by-hand stub:\n%s", out)
 	}
 }
 

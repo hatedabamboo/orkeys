@@ -73,11 +73,13 @@ func Load(root string) (*Inventory, error) {
 	}
 	sort.Slice(inv.Keys, func(i, j int) bool { return inv.Keys[i].Name < inv.Keys[j].Name })
 	for _, k := range inv.Keys {
+		manual := inv.Policy.Manual(k.Provider)
 		if kp := inv.Policy.Kind(k.Kind); kp != nil {
-			if k.Budget.Limit == 0 {
+			// A void key has no spend data. A budget from the kind would be a limit that nothing enforces.
+			if k.Budget.Limit == 0 && !manual {
 				k.Budget.Limit = kp.Budget.Limit
 			}
-			if k.Budget.Reset == "" {
+			if k.Budget.Reset == "" && !manual {
 				k.Budget.Reset = kp.Budget.Reset
 			}
 			if k.TTL.Duration == 0 {

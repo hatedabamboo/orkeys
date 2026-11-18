@@ -117,6 +117,9 @@ func providerFromSecrets(ctx context.Context, sec secrets.Store, name string, cf
 		kind = name
 	}
 	info, _ := provider.Lookup(kind)
+	if info.Caps.Manual {
+		return provider.New(kind, pc)
+	}
 	envKey := providerEnv(name, "KEY")
 	if v := strings.TrimSpace(os.Getenv(envKey)); v != "" {
 		slog.DebugContext(ctx, "provider management key from env", "provider", name, "kind", kind, "env", envKey)
@@ -155,6 +158,12 @@ func providerFromSecrets(ctx context.Context, sec secrets.Store, name string, cf
 }
 
 func (a *app) engine(ctx context.Context, outDir string) (*engine.Engine, error) {
+	return a.newEngine(ctx, outDir, false)
+}
+
+// newEngine builds the engine. With manualOnly, it connects only the providers whose keys a person makes (void and
+// ManualCreate). orkeys put needs no management key of a provider that creates its keys.
+func (a *app) newEngine(ctx context.Context, outDir string, manualOnly bool) (*engine.Engine, error) {
 	inv, err := a.loadInventory()
 	if err != nil {
 		return nil, err
@@ -170,6 +179,9 @@ func (a *app) engine(ctx context.Context, outDir string) (*engine.Engine, error)
 	}
 	providers := provider.Set{}
 	for name, cfg := range inv.Policy.Providers {
+		if manualOnly && !inv.Policy.ByHand(name) {
+			continue
+		}
 		p, err := providerFromSecrets(ctx, sec, name, cfg, a.timeout)
 		if err != nil {
 			return nil, err

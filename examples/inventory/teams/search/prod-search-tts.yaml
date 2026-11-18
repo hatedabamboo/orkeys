@@ -1,0 +1,18 @@
+---
+name: prod-search-tts                         # must match the file name
+kind: production
+provider: elevenlabs                          # void provider: no API; orkeys reminds and delivers
+env: prod
+service: tts                                  # free text, metric label
+description: Voice answers of the search app.
+issued: 2026-11-01                            # date of the value in secret; change it at each rotation
+ttl: 90d                                      # rotation period; reminders before it ends
+secret:                                       # where orkeys put writes the key
+  path: secret/llm/prod/search/tts
+  field: api_key
+consumers:
+  - type: eso                                 # force-sync after each orkeys put
+    cluster: prod-eu
+    namespace: search
+    externalsecret: search-tts
+    restart: [deployment/search-voice]        # restarted after the sync

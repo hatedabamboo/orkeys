@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/hatedabamboo/orkeys/internal/manifest"
 	"github.com/hatedabamboo/orkeys/internal/provider"
 	"github.com/hatedabamboo/orkeys/internal/state"
 )
@@ -79,6 +80,9 @@ func (e *Engine) rotateOne(ctx context.Context, st *state.State, keys []provider
 	case kp == nil:
 		return fmt.Errorf("kind %q is not in policy.yaml kinds", st.Kind)
 
+	case e.byHand(st.Provider):
+		return e.rotateVoid(ctx, st, kp, keys, retry, force)
+
 	default:
 		k := e.Inv.Key(st.Name)
 		if k == nil {
@@ -94,9 +98,12 @@ func (e *Engine) rotateOne(ctx context.Context, st *state.State, keys []provider
 		}
 		if retry && st.Rotation == state.RotationFailed {
 			st.Rotation, st.RotationError = state.RotationPending, ""
+			// The retry says that the consumers are fixed. Only spend after the retry sync counts.
+			// The old baseline stays below the usage forever: OpenRouter reports lifetime usage.
 			for i := range st.PendingRevokes {
 				if st.PendingRevokes[i].Source == state.RevokeRotation {
 					st.PendingRevokes[i].After = time.Time{}
+					st.PendingRevokes[i].Baseline = nil
 				}
 			}
 			changed = true
@@ -123,29 +130,13 @@ func (e *Engine) rotateOne(ctx context.Context, st *state.State, keys []provider
 			changed = false
 		}
 		if st.Rotation == state.RotationPending {
-			e.debug(ctx, "rotate: sync consumers", "key", st.Name, "key_id", short(st.KeyID), "consumers", len(k.Consumers))
-			if err := e.syncConsumers(ctx, k, st); err != nil {
-				if ctx.Err() != nil {
-					// A stopped run is not a failed sync. The next run syncs the consumers again.
-					return errors.Join(err, e.putState(ctx, st))
-				}
-				st.Rotation, st.RotationError = state.RotationFailed, err.Error()
-				e.emit(st, LevelAlert, EventRotationFailed, "rotation failed: %v; the old key stays active; after the fix run: orkeys rotate --retry %s", err, st.Name)
-				return e.putState(ctx, st)
+			ids, ok, err := e.syncPending(ctx, k, st, kp, now)
+			if !ok {
+				return err
 			}
-			grace := kp.RevokeGrace.Duration
-			var ids []string
-			for i := range st.PendingRevokes {
-				if st.PendingRevokes[i].After.IsZero() {
-					st.PendingRevokes[i].After = now.Add(grace)
-					st.PendingRevokes[i].CheckFrom = now.Add(drain)
-					ids = append(ids, short(st.PendingRevokes[i].KeyID))
-				}
-			}
-			st.Rotation = state.RotationIdle
 			changed = true
 			e.emit(st, LevelInfo, EventRotationSynced, "consumers use the new key; old key %s will be revoked after %s",
-				strings.Join(ids, ", "), now.Add(grace).Format("2006-01-02 15:04 UTC"))
+				strings.Join(ids, ", "), now.Add(kp.RevokeGrace.Duration).Format("2006-01-02 15:04 UTC"))
 		}
 	}
 
@@ -161,6 +152,30 @@ func (e *Engine) rotateOne(ctx context.Context, st *state.State, keys []provider
 	}
 	e.debug(ctx, "rotate: no change", "key", st.Name)
 	return nil
+}
+
+// syncPending syncs the consumers of a pending rotation. On success, it starts the grace time of the old keys,
+// sets the rotation to idle and returns the short IDs of the old keys. On failure, it saves st and returns ok false.
+func (e *Engine) syncPending(ctx context.Context, k *manifest.Key, st *state.State, kp *manifest.KindPolicy, now time.Time) (ids []string, ok bool, err error) {
+	e.debug(ctx, "rotate: sync consumers", "key", st.Name, "key_id", short(st.KeyID), "consumers", len(k.Consumers))
+	if err := e.syncConsumers(ctx, k, st); err != nil {
+		if ctx.Err() != nil {
+			// A stopped run is not a failed sync. The next run syncs the consumers again.
+			return nil, false, errors.Join(err, e.putState(ctx, st))
+		}
+		st.Rotation, st.RotationError = state.RotationFailed, err.Error()
+		e.emit(st, LevelAlert, EventRotationFailed, "rotation failed: %v; the old key stays active; after the fix run: orkeys rotate --retry %s", err, st.Name)
+		return nil, false, e.putState(ctx, st)
+	}
+	for i := range st.PendingRevokes {
+		if st.PendingRevokes[i].After.IsZero() {
+			st.PendingRevokes[i].After = now.Add(kp.RevokeGrace.Duration)
+			st.PendingRevokes[i].CheckFrom = now.Add(drain)
+			ids = append(ids, short(st.PendingRevokes[i].KeyID))
+		}
+	}
+	st.Rotation = state.RotationIdle
+	return ids, true, nil
 }
 
 // fmtUSD formats a spend for logs. Nil is "unknown": the provider reports no spend.
@@ -226,7 +241,9 @@ func (e *Engine) processRevokes(ctx context.Context, st *state.State, keys []pro
 			continue
 		}
 		rest := append(append(keep, pr), st.PendingRevokes[i+1:]...)
-		if why := stillUsed(pr, old, usage, p.Caps()); why != "" {
+		// The current key is never revoked. An entry with the current ID only removes old secret places.
+		current := pr.KeyID == st.KeyID
+		if why := stillUsed(pr, old, usage, p.Caps()); why != "" && !current {
 			st.PendingRevokes = rest
 			st.Rotation = state.RotationFailed
 			st.RotationError = fmt.Sprintf("old key %s %s", short(pr.KeyID), why)
@@ -234,10 +251,10 @@ func (e *Engine) processRevokes(ctx context.Context, st *state.State, keys []pro
 				short(pr.KeyID), why)
 			return true, nil
 		}
-		if old != nil && usage == nil && old.LastUsedAt == nil && !p.Caps().LastUsed {
+		if old != nil && !current && usage == nil && old.LastUsedAt == nil && !p.Caps().LastUsed {
 			e.logf("%s: %s reports no use of key %s; it is revoked after the grace period without a use check", st.Name, st.Provider, short(pr.KeyID))
 		}
-		if old != nil {
+		if old != nil && !current {
 			if err := p.Delete(ctx, pr.KeyID); err != nil {
 				st.PendingRevokes = rest
 				return changed, err
@@ -249,6 +266,9 @@ func (e *Engine) processRevokes(ctx context.Context, st *state.State, keys []pro
 			if err := e.Secrets.DeleteField(ctx, r.Path, r.Field); err != nil {
 				e.logf("%s: remove old secret field %s: %v", st.Name, r, err)
 			}
+		}
+		if current {
+			continue
 		}
 		e.emit(st, LevelInfo, EventOldKeyRevoked, "old key %s revoked (%s)", short(pr.KeyID), pr.Reason)
 	}

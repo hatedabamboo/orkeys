@@ -27,6 +27,22 @@ type Caps struct {
 	Disable bool
 	// MaxExpiry is the longest native expiry. Zero means no limit.
 	MaxExpiry time.Duration
+	// Manual: the provider has no API. A person makes and revokes keys at the vendor. orkeys tracks the expiry and
+	// delivers the value that the person enters with orkeys put. The adapter has no credentials.
+	Manual bool
+	// ManualCreate: the API cannot create keys. A person makes the key at the vendor and enters it with orkeys put,
+	// as for a void provider. orkeys lists the keys, reads their spend and revokes old keys through the API.
+	// The adapter implements KeyIdentifier, so the state holds the provider ID of the value.
+	ManualCreate bool
+}
+
+// ByHand reports whether a person makes the keys at the vendor: the provider has no API or cannot create keys.
+func (c Caps) ByHand() bool { return c.Manual || c.ManualCreate }
+
+// KeyIdentifier returns the provider ID of a key value, or "" when the value is not a key of the provider.
+// Adapters with Caps.ManualCreate implement it.
+type KeyIdentifier interface {
+	KeyIDOf(value string) string
 }
 
 type Key struct {
@@ -124,7 +140,8 @@ var registry = []Info{
 	{Name: "openrouter", Short: "or", Caps: openRouterCaps, new: func(c Config) Provider { return newOpenRouter(c) }},
 	{Name: "deepinfra", Short: "di", Caps: deepInfraCaps, CheckScopes: checkDeepInfraScopes, new: func(c Config) Provider { return newDeepInfra(c) }},
 	{Name: "openai", Short: "oa", Caps: openAICaps, Options: openAIOptions, new: func(c Config) Provider { return newOpenAI(c) }},
-	{Name: "fal", Short: "fal", Caps: falCaps, CheckScopes: checkFalScopes, new: func(c Config) Provider { return newFal(c) }},
+	{Name: "fal", Short: "fal", Caps: falCaps, Options: falOptions, CheckScopes: checkFalScopes, new: func(c Config) Provider { return newFal(c) }},
+	{Name: "void", Caps: voidCaps, Options: voidOptions, new: func(c Config) Provider { return newVoid(c) }},
 }
 
 func Lookup(name string) (Info, bool) {
@@ -169,8 +186,13 @@ func New(name string, c Config) (Provider, error) {
 func checkCaps(p Provider) error {
 	_, limiter := p.(Limiter)
 	_, disabler := p.(Disabler)
-	if c := p.Caps(); c.PerKeyLimit != limiter || c.Disable != disabler {
+	c := p.Caps()
+	if c.PerKeyLimit != limiter || c.Disable != disabler {
 		return fmt.Errorf("provider %s: Caps PerKeyLimit=%t Disable=%t, but Limiter=%t Disabler=%t", p.Name(), c.PerKeyLimit, c.Disable, limiter, disabler)
+	}
+	// Without the provider ID, the state holds a hash of the value. Then a revoke misses the old key at the provider.
+	if _, ok := p.(KeyIdentifier); c.ManualCreate && !ok {
+		return fmt.Errorf("provider %s: Caps ManualCreate, but no KeyIdentifier", p.Name())
 	}
 	return nil
 }

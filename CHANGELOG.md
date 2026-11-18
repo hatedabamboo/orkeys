@@ -1,5 +1,35 @@
 # CHANGELOG
 
+## v0.6.0 (2026-11-18)
+
+- (feat) Provider type `fal` for fal.ai. The fal.ai API cannot create keys, so a person makes each key at fal.ai and
+  writes it to `secret` or runs `orkeys put`. orkeys reads the key ID from the value, exports the spend and the
+  `budget` (a metric only), syncs the consumers, and revokes the old key at fal.ai after `revoke_grace` with the usage
+  check [2ec8653](https://github.com/hatedabamboo/orkeys/commit/2ec8653a60bb9352b7d5daf8a14dfb3f30a6ae53) [e860a0c](https://github.com/hatedabamboo/orkeys/commit/e860a0ca58a2da91bcc63169eeb3733757a55cac)
+- (feat) `orkeys fal` lists fal.ai keys with their spend this day, week and month, shows one key and revokes keys.
+  `create` fails with `403`: fal.ai does not grant the permission `auth:keys:create` [2ec8653](https://github.com/hatedabamboo/orkeys/commit/2ec8653a60bb9352b7d5daf8a14dfb3f30a6ae53)
+- (change) `orkeys put` also writes fal.ai keys. It refuses a value that is not a fal.ai key, or a key that fal.ai does
+  not list, and it needs the fal.ai management key [e860a0c](https://github.com/hatedabamboo/orkeys/commit/e860a0ca58a2da91bcc63169eeb3733757a55cac)
+- (change) `orkeys import` prints fal.ai keys with `issued` in place of an `import` block [e860a0c](https://github.com/hatedabamboo/orkeys/commit/e860a0ca58a2da91bcc63169eeb3733757a55cac)
+
+## v0.5.0 (2026-11-17)
+
+- (feat) Provider type `void` for vendors without a key API. orkeys tracks the expiry of a `void` key, writes its
+  value to `secret` and syncs the consumers. A person makes and revokes the key at the vendor [2318e0c](https://github.com/hatedabamboo/orkeys/commit/2318e0cbce61f3403bb28abdcda5df179e5c2e56)
+- (feat) `orkeys put <key>` writes a new value of a `void` key from stdin. `--issued` sets the creation date. The next
+  `rotate` syncs the consumers [2318e0c](https://github.com/hatedabamboo/orkeys/commit/2318e0cbce61f3403bb28abdcda5df179e5c2e56)
+- (feat) `issued` field for `void` keys: the date of the value in `secret`. Change it after you write a new value to
+  the secret, and `plan` shows `adopt-value`. The key expires at `issued` plus `ttl` [2318e0c](https://github.com/hatedabamboo/orkeys/commit/2318e0cbce61f3403bb28abdcda5df179e5c2e56)
+- (feat) Events for `void` keys: `key_expired` and `value_missing` alerts repeat once a day until the key has a new
+  value. `revoke_by_hand` names the old key to revoke at the vendor [2318e0c](https://github.com/hatedabamboo/orkeys/commit/2318e0cbce61f3403bb28abdcda5df179e5c2e56)
+- (fix) `apply` and `rotate` no longer fail when the secret at `secret.path` does not exist yet in Vault or AWS
+  Secrets Manager [2318e0c](https://github.com/hatedabamboo/orkeys/commit/2318e0cbce61f3403bb28abdcda5df179e5c2e56)
+
+## v0.4.7 (2026-11-17)
+
+- (fix) `rotate --retry` takes a new usage baseline of the old key. Before, the check after a retry counted the spend
+  from before the retry, and the rotation failed again with the same `old_key_in_use` amount [be51228](https://github.com/hatedabamboo/orkeys/commit/be51228091ba507973a6549dfda3fc592151c1ae)
+
 ## v0.4.6 (2026-11-16)
 
 - (change) Provider and Vault writes retry on HTTP 429. The server rejects a rate-limited request before it

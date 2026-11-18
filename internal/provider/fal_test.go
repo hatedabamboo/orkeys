@@ -81,6 +81,21 @@ func TestFalList(t *testing.T) {
 	}
 }
 
+func TestFalKeyIDOf(t *testing.T) {
+	p := newFal(Config{})
+	for value, want := range map[string]string{
+		"fal_sk_1:secret": "fal_sk_1",
+		" fal_sk_1:s\n":   "fal_sk_1",
+		"fal_sk_1":        "",
+		":secret":         "",
+		"fal_sk_1:":       "",
+	} {
+		if got := p.KeyIDOf(value); got != want {
+			t.Errorf("%q: %q, want %q", value, got, want)
+		}
+	}
+}
+
 func TestFalSelfID(t *testing.T) {
 	if got := newFal(Config{Key: "abc:def"}).SelfID(); got != "abc" {
 		t.Fatal(got)
@@ -158,5 +173,19 @@ func TestCheckFalScopes(t *testing.T) {
 		if err := checkFalScopes(strings.Split(scopes, ",")); (err == nil) != ok {
 			t.Errorf("%s: %v", scopes, err)
 		}
+	}
+}
+
+type noIdentifier struct{ *falAI }
+
+func (noIdentifier) KeyIDOf() {}
+
+func TestCheckCapsManualCreate(t *testing.T) {
+	if err := checkCaps(newFal(Config{})); err != nil {
+		t.Fatal(err)
+	}
+	// A ManualCreate adapter without KeyIdentifier would keep a hash in the state and miss the old key at revoke.
+	if err := checkCaps(noIdentifier{newFal(Config{})}); err == nil || !strings.Contains(err.Error(), "no KeyIdentifier") {
+		t.Fatalf("want error, got %v", err)
 	}
 }

@@ -257,6 +257,10 @@ func (x *Exporter) render() []byte {
 			}
 		},
 		func(st *state.State, l []string, _ *provider.Key) {
+			// A void key has no budget: orkeys has no spend data of it.
+			if x.manual(st.Provider) {
+				return
+			}
 			w.gauge("orkeys_key_budget_usd", "Budget from the manifest in USD, per period (label reset).", l, st.LimitUSD)
 		},
 		func(st *state.State, l []string, k *provider.Key) {
@@ -324,10 +328,11 @@ func (x *Exporter) render() []byte {
 		},
 		func(st *state.State, l []string, k *provider.Key) {
 			v := 0.0
-			if k == nil {
+			// orkeys cannot see a void key at the vendor. It is missing only when its secret has no value yet.
+			if manual := x.manual(st.Provider); (!manual && k == nil) || (manual && st.KeyID == "" && len(st.Secrets) > 0) {
 				v = 1
 			}
-			w.gauge("orkeys_key_missing", "1 if the key in state is not found at the provider.", l, v)
+			w.gauge("orkeys_key_missing", "1 if the key in state is not found at the provider, or a void key has no value yet.", l, v)
 		},
 		func(st *state.State, l []string, k *provider.Key) {
 			if k == nil {
@@ -423,4 +428,10 @@ func resetOf(st *state.State) string {
 		return "monthly"
 	}
 	return st.LimitReset
+}
+
+// manual reports whether the provider name has no API.
+func (x *Exporter) manual(name string) bool {
+	p, ok := x.Providers[name]
+	return ok && p.Caps().Manual
 }

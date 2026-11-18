@@ -98,8 +98,8 @@ type CreatedKey struct {
 
 // KeyID returns the key ID of a key value (key_id:key_secret), or "" for a value without an ID.
 func KeyID(key string) string {
-	id, _, ok := strings.Cut(strings.TrimSpace(key), ":")
-	if !ok {
+	id, secret, ok := strings.Cut(strings.TrimSpace(key), ":")
+	if !ok || id == "" || secret == "" {
 		return ""
 	}
 	return id
