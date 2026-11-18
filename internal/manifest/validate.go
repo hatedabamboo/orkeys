@@ -166,13 +166,16 @@ func (inv *Inventory) Validate() []Problem {
 		case kp.Source != SourceManifest:
 			add(p, "kind: %s keys are issued with orkeys request, not with manifests", k.Kind)
 		}
-		manual := pol.Manual(k.Provider)
-		if manual {
+		switch {
+		case pol.Manual(k.Provider):
 			validateVoid(k, add)
-		} else {
+		case pol.ManualCreate(k.Provider) && !k.TrackOnly():
+			validateBudget(pol, k, kp, add)
+			validateManualCreate(k, add)
+		default:
 			validateBudget(pol, k, kp, add)
 			if !k.Issued.IsZero() {
-				add(p, "issued: only for void providers; orkeys knows the creation time of %s keys", k.Provider)
+				add(p, "issued: only for keys that a person makes (void and fal providers); orkeys knows the creation time of %s keys", k.Provider)
 			}
 		}
 		if kp != nil && !kp.AllowsProvider(k.Provider) {
@@ -191,7 +194,7 @@ func (inv *Inventory) Validate() []Problem {
 			}
 		}
 		if info, ok := provider.Lookup(pol.ProviderKind(k.Provider)); ok {
-			if k.Disabled && !info.Caps.Disable && !manual {
+			if k.Disabled && !info.Caps.Disable && !info.Caps.Manual {
 				add(p, "disabled: %s keys cannot be disabled; delete the manifest to revoke the key", k.Provider)
 			}
 			if info.Caps.MaxExpiry > 0 && k.TTL.Duration > info.Caps.MaxExpiry {
@@ -252,8 +255,8 @@ func validateKind(pol *Policy, name string, add func(string, string, ...any)) {
 		if _, ok := pol.Providers[p]; !ok {
 			add("policy.yaml", "%s.providers: %q is not in providers", at, p)
 		}
-		if kp.Source == SourceRequest && pol.Manual(p) {
-			add("policy.yaml", "%s.providers: %s is a void provider; orkeys request cannot make its keys", at, p)
+		if kp.Source == SourceRequest && pol.ByHand(p) {
+			add("policy.yaml", "%s.providers: a person makes the keys of %s at the vendor; orkeys request cannot make them", at, p)
 		}
 	}
 	switch kp.Source {
@@ -419,8 +422,24 @@ func validateVoid(k *Key, add func(string, string, ...any)) {
 	if len(k.Consumers) > 0 && len(k.Secrets) == 0 {
 		add(p, "consumers: need secret; orkeys reads the key from the secrets store to deliver it")
 	}
+	validateIssued(k, add)
+}
+
+// validateManualCreate checks a key of a provider whose API cannot create keys. A person writes the key to the
+// secret, and orkeys reads the provider ID from the value. The general checks require the secret.
+func validateManualCreate(k *Key, add func(string, string, ...any)) {
+	if k.Import != nil {
+		add(k.Path, "import: not allowed for %s keys without track_only; write the current key to the secret or run orkeys put", k.Provider)
+	}
+	if len(k.Scopes) > 0 {
+		add(k.Path, "scopes: orkeys does not make %s keys; set the permissions when you make the key at the vendor", k.Provider)
+	}
+	validateIssued(k, add)
+}
+
+func validateIssued(k *Key, add func(string, string, ...any)) {
 	// One day of slack: a person east of UTC can write the local date.
 	if k.Issued.After(time.Now().Add(24 * time.Hour)) {
-		add(p, "issued: %s is in the future", k.Issued)
+		add(k.Path, "issued: %s is in the future", k.Issued)
 	}
 }

@@ -202,8 +202,8 @@ func (e *Engine) plan(ctx context.Context) (*Plan, map[string][]provider.Key, er
 				"key_id", short(st.KeyID), "phase", st.Phase, "rotation", st.Rotation, "track_only", k.TrackOnly() || st.TrackOnly)
 		}
 
-		if p.Caps().Manual {
-			if err := e.planVoid(ctx, plan, act); err != nil {
+		if c := p.Caps(); c.Manual || (c.ManualCreate && !k.TrackOnly() && (st == nil || !st.TrackOnly)) {
+			if err := e.planVoid(ctx, plan, act, lists[k.Provider]); err != nil {
 				return nil, nil, err
 			}
 			continue

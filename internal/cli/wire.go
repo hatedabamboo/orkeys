@@ -161,8 +161,8 @@ func (a *app) engine(ctx context.Context, outDir string) (*engine.Engine, error)
 	return a.newEngine(ctx, outDir, false)
 }
 
-// newEngine builds the engine. With manualOnly, it connects only the void providers. orkeys put needs no
-// management key of a provider with an API.
+// newEngine builds the engine. With manualOnly, it connects only the providers whose keys a person makes (void and
+// ManualCreate). orkeys put needs no management key of a provider that creates its keys.
 func (a *app) newEngine(ctx context.Context, outDir string, manualOnly bool) (*engine.Engine, error) {
 	inv, err := a.loadInventory()
 	if err != nil {
@@ -179,7 +179,7 @@ func (a *app) newEngine(ctx context.Context, outDir string, manualOnly bool) (*e
 	}
 	providers := provider.Set{}
 	for name, cfg := range inv.Policy.Providers {
-		if manualOnly && !inv.Policy.Manual(name) {
+		if manualOnly && !inv.Policy.ByHand(name) {
 			continue
 		}
 		p, err := providerFromSecrets(ctx, sec, name, cfg, a.timeout)

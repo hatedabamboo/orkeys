@@ -269,6 +269,15 @@ func TestRenderPlanMarkdownAndImportStubs(t *testing.T) {
 	if !strings.Contains(out, "track_only: true\nbudget:\n  reset: monthly\n  limit: 50\n") || strings.Contains(out, "secret:") {
 		t.Errorf("track stub:\n%s", out)
 	}
+	b.Reset()
+	created := time.Date(2026, 10, 15, 17, 59, 0, 0, time.UTC)
+	writeImportStubs(&b, []engine.Candidate{
+		{Provider: "fal", ByHand: true, Key: &provider.Key{ID: "fal_sk_1", Name: "prod", CreatedAt: created}},
+	}, false)
+	out = b.String()
+	if !strings.Contains(out, "issued: 2026-10-15\n") || strings.Contains(out, "import:") || !strings.Contains(out, "orkeys put") {
+		t.Errorf("by-hand stub:\n%s", out)
+	}
 }
 
 func TestFinishJSON(t *testing.T) {

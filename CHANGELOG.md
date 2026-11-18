@@ -1,5 +1,17 @@
 # CHANGELOG
 
+## v0.6.0 (2026-11-18)
+
+- (feat) Provider type `fal` for fal.ai. The fal.ai API cannot create keys, so a person makes each key at fal.ai and
+  writes it to `secret` or runs `orkeys put`. orkeys reads the key ID from the value, exports the spend and the
+  `budget` (a metric only), syncs the consumers, and revokes the old key at fal.ai after `revoke_grace` with the usage
+  check [2ec8653](https://github.com/hatedabamboo/orkeys/commit/2ec8653a60bb9352b7d5daf8a14dfb3f30a6ae53) [e860a0c](https://github.com/hatedabamboo/orkeys/commit/e860a0ca58a2da91bcc63169eeb3733757a55cac)
+- (feat) `orkeys fal` lists fal.ai keys with their spend this day, week and month, shows one key and revokes keys.
+  `create` fails with `403`: fal.ai does not grant the permission `auth:keys:create` [2ec8653](https://github.com/hatedabamboo/orkeys/commit/2ec8653a60bb9352b7d5daf8a14dfb3f30a6ae53)
+- (change) `orkeys put` also writes fal.ai keys. It refuses a value that is not a fal.ai key, or a key that fal.ai does
+  not list, and it needs the fal.ai management key [e860a0c](https://github.com/hatedabamboo/orkeys/commit/e860a0ca58a2da91bcc63169eeb3733757a55cac)
+- (change) `orkeys import` prints fal.ai keys with `issued` in place of an `import` block [e860a0c](https://github.com/hatedabamboo/orkeys/commit/e860a0ca58a2da91bcc63169eeb3733757a55cac)
+
 ## v0.5.0 (2026-11-17)
 
 - (feat) Provider type `void` for vendors without a key API. orkeys tracks the expiry of a `void` key, writes its

@@ -166,10 +166,13 @@ func (e *Engine) remove(ctx context.Context, st *state.State, reason string) err
 	// orkeys cannot revoke a void key. voidRemoved tells a person to do it.
 	manual := e.manual(st.Provider)
 	var errs []error
+	seen := map[string]bool{}
 	for _, id := range st.KnownIDs() {
-		if manual {
+		// A key that a person makes has no ID until it has a value. A moved value is in the list twice.
+		if manual || id == "" || seen[id] {
 			continue
 		}
+		seen[id] = true
 		if err := e.revoke(ctx, st.Provider, id); err != nil {
 			errs = append(errs, err)
 		}

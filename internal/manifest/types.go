@@ -276,6 +276,19 @@ func (p *Policy) Manual(name string) bool {
 	return ok && info.Caps.Manual
 }
 
+// ManualCreate reports whether the API of provider name cannot create keys (fal). A person makes its keys at the
+// vendor, and orkeys revokes them through the API.
+func (p *Policy) ManualCreate(name string) bool {
+	info, ok := provider.Lookup(p.ProviderKind(name))
+	return ok && info.Caps.ManualCreate
+}
+
+// ByHand reports whether a person makes the keys of provider name: Manual or ManualCreate.
+func (p *Policy) ByHand(name string) bool {
+	info, ok := provider.Lookup(p.ProviderKind(name))
+	return ok && info.Caps.ByHand()
+}
+
 type ProviderConfig struct {
 	// Name is the provider name used in manifests, state and metrics. Kind is its type.
 	Name          string          `yaml:"name"`

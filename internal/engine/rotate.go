@@ -80,8 +80,8 @@ func (e *Engine) rotateOne(ctx context.Context, st *state.State, keys []provider
 	case kp == nil:
 		return fmt.Errorf("kind %q is not in policy.yaml kinds", st.Kind)
 
-	case e.manual(st.Provider):
-		return e.rotateVoid(ctx, st, kp, retry, force)
+	case e.byHand(st.Provider):
+		return e.rotateVoid(ctx, st, kp, keys, retry, force)
 
 	default:
 		k := e.Inv.Key(st.Name)
@@ -241,7 +241,9 @@ func (e *Engine) processRevokes(ctx context.Context, st *state.State, keys []pro
 			continue
 		}
 		rest := append(append(keep, pr), st.PendingRevokes[i+1:]...)
-		if why := stillUsed(pr, old, usage, p.Caps()); why != "" {
+		// The current key is never revoked. An entry with the current ID only removes old secret places.
+		current := pr.KeyID == st.KeyID
+		if why := stillUsed(pr, old, usage, p.Caps()); why != "" && !current {
 			st.PendingRevokes = rest
 			st.Rotation = state.RotationFailed
 			st.RotationError = fmt.Sprintf("old key %s %s", short(pr.KeyID), why)
@@ -249,10 +251,10 @@ func (e *Engine) processRevokes(ctx context.Context, st *state.State, keys []pro
 				short(pr.KeyID), why)
 			return true, nil
 		}
-		if old != nil && usage == nil && old.LastUsedAt == nil && !p.Caps().LastUsed {
+		if old != nil && !current && usage == nil && old.LastUsedAt == nil && !p.Caps().LastUsed {
 			e.logf("%s: %s reports no use of key %s; it is revoked after the grace period without a use check", st.Name, st.Provider, short(pr.KeyID))
 		}
-		if old != nil {
+		if old != nil && !current {
 			if err := p.Delete(ctx, pr.KeyID); err != nil {
 				st.PendingRevokes = rest
 				return changed, err
@@ -264,6 +266,9 @@ func (e *Engine) processRevokes(ctx context.Context, st *state.State, keys []pro
 			if err := e.Secrets.DeleteField(ctx, r.Path, r.Field); err != nil {
 				e.logf("%s: remove old secret field %s: %v", st.Name, r, err)
 			}
+		}
+		if current {
+			continue
 		}
 		e.emit(st, LevelInfo, EventOldKeyRevoked, "old key %s revoked (%s)", short(pr.KeyID), pr.Reason)
 	}

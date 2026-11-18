@@ -22,16 +22,19 @@ func (a *app) putCmd() *cobra.Command {
 	var issued string
 	cmd := &cobra.Command{
 		Use:   "put <name>",
-		Short: "Write a new value of a void key; the next rotate syncs the consumers",
-		Long: `put is for keys of void providers: providers without an API. Make the new key at the vendor first.
+		Short: "Write a new value of a key that a person makes; the next rotate syncs the consumers",
+		Long: `put is for keys that a person makes at the vendor: keys of void providers (no API) and of providers
+whose API cannot create keys (fal). Make the new key at the vendor first.
 
 put reads the key from stdin, or asks for it on a terminal. It does not take the key as an argument.
 put writes the key to all secret places of the manifest and starts a rotation. The next orkeys rotate
-syncs the consumers and tells the team to revoke the old key at the vendor.
+syncs the consumers. For a void key, it tells the team to revoke the old key at the vendor. For a fal key,
+put first checks that fal lists the key, and rotate revokes the old key after revoke_grace.
 
 For a key without secret, put reads no value and records only the dates.
 
-put needs write access to the state store and the secrets store. It needs no management key.
+put needs write access to the state store and the secrets store. A void key needs no management key.
+A fal key needs the fal management key.
 The key expires at --issued plus the ttl. If the manifest sets issued, put tells you the new date
 to write there.`,
 		Example: `  orkeys put prod-voice-tts

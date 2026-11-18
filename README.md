@@ -6,8 +6,8 @@
 
 `orkeys` (pronounced "ORKies") is an IaC for your LLM API keys. `orkeys` manages LLM API keys. It has two modes:
 
-- **Provider commands** manage keys at one provider directly: `orkeys openrouter` (`or`), `orkeys deepinfra` (`di`)
-  and `orkeys openai` (`oa`).
+- **Provider commands** manage keys at one provider directly: `orkeys openrouter` (`or`), `orkeys deepinfra` (`di`),
+  `orkeys openai` (`oa`) and `orkeys fal`.
 - **Inventory mode** manages keys of all providers from an inventory repository, with state and secrets in Vault or
   AWS, rotation, alerts and self-service keys (see [Inventory mode](#inventory-mode)).
 
@@ -34,51 +34,52 @@ make install
 OpenRouter has full support. DeepInfra is read only: DeepInfra does not let an API key create, limit, disable or
 delete tokens (see [DeepInfra](#deepinfra)). Each write to DeepInfra fails with `401`. OpenAI has no per-key limit and
 no disabled flag: orkeys creates, rotates and deletes OpenAI keys, and tracks their budget only in metrics (see
-[OpenAI](#openai)).
+[OpenAI](#openai)). The fal.ai API cannot create keys, and fal.ai has no per-key limit and no disabled flag: a person
+makes each fal.ai key, and orkeys delivers, tracks and revokes it (see [fal.ai](#falai)).
 
 ### Support in provider commands
 
-| Feature | OpenRouter (`or`) | DeepInfra (`di`) | OpenAI (`oa`) |
-|---|---|---|---|
-| List keys (`list`) | yes | yes. No scopes and no creation time | yes. Keys of users and service accounts |
-| Show one key (`get`) | yes | yes | yes |
-| Create a key (`create`) | yes | no | yes. One service account per key |
-| Change the limit (`update --limit`) | yes | no | no per-key limit |
-| Limit period (`--limit-reset`) | `daily`, `weekly`, `monthly` | `monthly` only | no per-key limit |
-| Expiry (`--expires`) | yes | no | yes. At most 365d |
-| Rename (`update --name`) | yes | no | no |
-| Change scopes (`update --scopes`) | no scopes | no | yes |
-| List possible scopes (`scopes`) | no scopes | yes | no |
-| Disable a key (`disable`) | yes | no | no |
-| Enable a key (`enable`) | yes | no command | no |
-| Delete a key (`delete`) | yes | no | yes |
-| Workspaces (`--workspace`) | yes | no | one project per call (`--project`), required |
-| Spend shown | day, week, month, total | month | day, week, month |
-| Last use shown | yes | no | yes |
+| Feature | OpenRouter (`or`) | DeepInfra (`di`) | OpenAI (`oa`) | fal.ai (`fal`) |
+|---|---|---|---|---|
+| List keys (`list`) | yes | yes. No scopes and no creation time | yes. Keys of users and service accounts | yes |
+| Show one key (`get`) | yes | yes | yes | yes |
+| Create a key (`create`) | yes | no | yes. One service account per key | no. fal.ai refuses it with `403` |
+| Change the limit (`update --limit`) | yes | no | no per-key limit | no per-key limit |
+| Limit period (`--limit-reset`) | `daily`, `weekly`, `monthly` | `monthly` only | no per-key limit | no per-key limit |
+| Expiry (`--expires`) | yes | no | yes. At most 365d | yes. At most 365d |
+| Rename (`update --name`) | yes | no | no | no |
+| Change scopes (`update --scopes`) | no scopes | no | yes | no. Preset or permissions only at create |
+| List possible scopes (`scopes`) | no scopes | yes | no | no |
+| Disable a key (`disable`) | yes | no | no | no |
+| Enable a key (`enable`) | yes | no command | no | no |
+| Delete a key (`delete`) | yes | no | yes | yes. A revoke cannot be undone |
+| Workspaces (`--workspace`) | yes | no | one project per call (`--project`), required | the workspace of the key |
+| Spend shown | day, week, month, total | month | day, week, month | day, week, month. An estimate |
+| Last use shown | yes | no | yes | no |
 
 ### Support in inventory mode
 
-| Feature | OpenRouter | DeepInfra | OpenAI |
-|---|---|---|---|
-| `validate`, `state` | yes | yes | yes |
-| `plan` | yes | yes | yes |
-| `apply`: create a key | yes | no | yes |
-| `apply`: set the limit | yes | no | no. The budget is only a metric |
-| `apply`: `disabled: true` | yes. Sets the disabled flag | no | no. `validate` rejects it |
-| `apply`: revoke a deleted manifest | yes | no | yes |
-| `budget.reset` | `daily`, `weekly`, `monthly` | `monthly` only | `daily`, `weekly`, `monthly`. Only a metric |
-| `scopes` field | no | yes. Used only at create | yes. Used only at create |
-| `rotate` | yes. The key also has a native expiry | no | yes. The key also has a native expiry. `ttl` at most 365d |
-| `request`, `revoke` | yes | no | yes |
-| `import`: print manifests | yes | yes | yes |
-| `apply`: adopt an `import` key | yes | no | yes |
-| `apply`: track a key (`track_only: true`) | yes | yes | yes |
-| `hygiene`: revoke keys of people who left | yes | no | yes |
-| `hygiene`: find unused keys | yes | no. DeepInfra has no last use | yes |
-| `exporter`: spend | yes | yes. Spend this month only | yes |
-| `exporter`: hard limit | yes | yes | no. Budget only |
-| `exporter`: last use | yes | no | yes |
-| Old key "still in use" check at revoke | total usage | spend this month | last use (exact), spend this month |
+| Feature | OpenRouter | DeepInfra | OpenAI | fal.ai |
+|---|---|---|---|---|
+| `validate`, `state` | yes | yes | yes | yes |
+| `plan` | yes | yes | yes | yes |
+| `apply`: create a key | yes | no | yes | no. A person makes the key and writes it with `orkeys put` |
+| `apply`: set the limit | yes | no | no. The budget is only a metric | no. The budget is only a metric |
+| `apply`: `disabled: true` | yes. Sets the disabled flag | no | no. `validate` rejects it | no. `validate` rejects it |
+| `apply`: revoke a deleted manifest | yes | no | yes | yes |
+| `budget.reset` | `daily`, `weekly`, `monthly` | `monthly` only | `daily`, `weekly`, `monthly`. Only a metric | `daily`, `weekly`, `monthly`. Only a metric |
+| `scopes` field | no | yes. Used only at create | yes. Used only at create | no. A person sets the permissions at fal.ai |
+| `rotate` | yes. The key also has a native expiry | no | yes. The key also has a native expiry. `ttl` at most 365d | by hand: reminders, then `orkeys put`. `rotate` syncs the consumers and revokes the old key |
+| `request`, `revoke` | yes | no | yes | no |
+| `import`: print manifests | yes | yes | yes | yes |
+| `apply`: adopt an `import` key | yes | no | yes | no. Write the key to `secret`; orkeys reads the key ID from the value |
+| `apply`: track a key (`track_only: true`) | yes | yes | yes | yes |
+| `hygiene`: revoke keys of people who left | yes | no | yes | no. No requested keys |
+| `hygiene`: find unused keys | yes | no. DeepInfra has no last use | yes | no. fal.ai has no last use |
+| `exporter`: spend | yes | yes. Spend this month only | yes | yes. An estimate |
+| `exporter`: hard limit | yes | yes | no. Budget only | no. Budget only |
+| `exporter`: last use | yes | no | yes | no |
+| Old key "still in use" check at revoke | total usage | spend this month | last use (exact), spend this month | spend this month (an estimate) |
 
 A provider of type `void` has no API. orkeys tracks the expiry of its keys and delivers the values that a person
 enters. See [Keys without an API](#keys-without-an-api).
@@ -192,6 +193,81 @@ Limits of the OpenAI Admin API:
 
 Commands that take `<key>` accept a key ID or an exact key name.
 
+### fal.ai
+
+The fal.ai API cannot create keys. `POST /v1/keys` needs the permission `auth:keys:create`. No key has it, also a key
+with the `FULL` preset, and the dashboard cannot grant it. So `orkeys fal create` fails with `403`, and a person makes
+each key at [fal.ai/dashboard/keys](https://fal.ai/dashboard/keys). In inventory mode, orkeys does the rest (see
+[fal.ai keys in inventory mode](#falai-keys-in-inventory-mode)).
+
+`orkeys fal` uses the [Platform API](https://fal.ai/docs/api-reference/platform-apis) to list and revoke the API keys
+of one fal.ai workspace. The management key needs the permissions `auth:keys:read`, `auth:keys:write` (revoke),
+`billing:usage:read` and `account:users:read` (spend). A custom key with "Keys: Read, Write" and "Billing: Usage" has
+them. A key with the `FULL` preset also works.
+
+| Variable | Required | Purpose |
+|---|---|---|
+| `FAL_ADMIN_KEY` | yes | Management key, as `key_id:key_secret` |
+| `FAL_API_BASE` | no | API base URL. Default: `https://api.fal.ai/v1` |
+
+```sh
+orkeys fal list                         # keys with spend this month
+orkeys fal list -o wide                 # with day and week spend, creation time, description
+orkeys fal get ci
+orkeys fal delete ci -y                 # revoke
+```
+
+Limits of the fal.ai Platform API:
+
+- A revoke cannot be undone. fal.ai has no disabled flag, so `delete` (revoke) is the only way to stop a key.
+- fal.ai has no per-key spend limit. In inventory mode, orkeys keeps `budget` only as a metric
+  (`orkeys_key_budget_usd`).
+- A key cannot be renamed, and its preset, permissions and expiry cannot change after create.
+- The secret of a new key is `key_id:key_secret`. Clients send it as `Authorization: Key <secret>`.
+- `scopes` (`--scopes`) is one preset (`API`, `AGENT`, `DEPLOY`, `READONLY`, `BILLING`, `COMPUTE`, `SERVERLESS`) or a
+  list of permissions such as `models:requests:submit`. The default is `API`. orkeys refuses `FULL` and
+  the `auth:keys:*` permissions except `auth:keys:read`, because a key with them can create or revoke keys.
+- The expiry is at most 365 days. The fal.ai dashboard allows 1 hour to 1 year. The API docs give no limit.
+- Spend comes from the usage endpoint (`/models/usage`), in 1-day UTC buckets. It is the fal.ai estimate. A week starts
+  on Monday. Usage of a dashboard login is not in the spend of any key.
+- orkeys finds the ID of the management key from its value (`key_id:key_secret`), so `self_id` is not necessary.
+  `delete` refuses to revoke the key in `FAL_ADMIN_KEY`.
+
+#### fal.ai keys in inventory mode
+
+fal.ai keys use the flow of [Keys without an API](#keys-without-an-api): a person makes the key, writes it to the
+secret or runs `orkeys put`, and orkeys syncs the consumers and sends the rotation reminders. The fal.ai API adds
+these steps:
+
+- The value is `key_id:key_secret`. orkeys reads the key ID from it, so the state holds the fal.ai `key_id`. `put` and
+  `plan` refuse a value that is not a fal.ai key, or a key that fal.ai does not list.
+- The exporter shows the spend and the budget of the key. `budget` is allowed, as a metric only.
+- After a new key reaches the consumers, `rotate` revokes the old key at fal.ai after `revoke_grace`. It uses the
+  usage check of [Rotation](#rotation): spend on the old key after the switch stops the revoke. There is no
+  `revoke_by_hand` event.
+- When the manifest is deleted, `apply` revokes the key at fal.ai.
+- `import` and `scopes` are not allowed. Set the permissions and the expiry when you make the key. `issued` is
+  allowed.
+- `track_only: true` with `import` works as for other providers: orkeys exports the spend and does not change the key.
+
+```yaml
+name: prod-media-images
+kind: production
+provider: fal
+env: prod
+description: Image generation for the media service.
+issued: 2026-11-18                            # date of the key at fal.ai; change it at each rotation
+budget: {limit: 300}                          # a metric only; fal.ai does not stop the key
+secret:
+  path: secret/llm/prod/media/images
+consumers:
+  - type: eso
+    cluster: prod-eu
+    namespace: media
+    externalsecret: media-llm
+    restart: [deployment/media-api]
+```
+
 Run `orkeys <provider> <command> --help` to see all flags.
 
 ### Output
@@ -205,7 +281,7 @@ JSON output holds the full API objects. `create --json` includes the secret in `
 |---|---|
 | `--limit` | USD amount, or `none` to remove the limit |
 | `--limit-reset` | OpenRouter only: `daily`, `weekly`, `monthly` or `none`. Resets happen at midnight UTC |
-| `--expires` | OpenRouter only: duration (`30d`, `2w`, `12h`), date (`2027-12-31`, midnight UTC) or RFC 3339 |
+| `--expires` | OpenRouter, OpenAI and fal.ai: duration (`30d`, `2w`, `12h`), date (`2027-12-31`, midnight UTC) or RFC 3339 |
 
 ### Behavior
 
@@ -322,7 +398,7 @@ Unknown fields are errors, so a typo does not pass silently.
 | `secrets` | `vault` | Secrets store: `vault` or `aws` (Secrets Manager) |
 | `providers[]` | | Provider accounts. A list of `{name, kind, ...}`, or a map from name to config. See [Providers](#providers) |
 | `providers[].name` | | Name used in manifests (`provider:`), kinds, state and metrics. Matches `^[a-z][a-z0-9-]*$` |
-| `providers[].kind` | the name | Provider type: `openrouter`, `deepinfra`, `openai` or `void` (no API, see [Keys without an API](#keys-without-an-api)) |
+| `providers[].kind` | the name | Provider type: `openrouter`, `deepinfra`, `openai`, `fal` or `void` (no API, see [Keys without an API](#keys-without-an-api)) |
 | `providers[].management_key` | | Secret path with field `key` (and optional `self_id`, `workspace`, `base_url`, and the provider options). Optional if `ORKEYS_<NAME>_KEY` is set |
 | `providers[].workspace`, `base_url` | | OpenRouter workspace or OpenAI project ID; API base URL |
 | `providers[].options` | | Settings of the provider. All types: `report_unmanaged`, `ignore_disabled`, `ignore_unmanaged` (see [Keys without a manifest](#keys-without-a-manifest)) and `track_only` (see [Tracking a key](#tracking-a-key)). `openai`: `project` (the project ID, required here or in `workspace`). `void`: `console` (the vendor page for keys; events show it). Unknown options are errors |
@@ -355,6 +431,8 @@ providers:
     management_key: secret/orkeys/providers/openai     # an Admin API key
     options:
       project: proj_abc123                             # the project that holds the keys
+  - name: fal
+    management_key: secret/orkeys/providers/fal        # lists, reads spend and revokes; cannot create
 ```
 
 The map form still works. The map key is the name, and the kind defaults to it:
@@ -468,14 +546,14 @@ service (Alertmanager, a CI step, a bot) can route them.
 | `env` | yes | One of `envs` |
 | `service` | no | Free text; exported as a metric label |
 | `description` | yes | |
-| `scopes` | no | DeepInfra and OpenAI. DeepInfra default: `[inference]`; `unrestricted` is not allowed. OpenAI default: all permissions of the service account; for example `[api.all.read]` |
-| `budget.limit` | no | Limit in USD at the provider; the provider blocks the key when spend in the period reaches it. OpenAI has no per-key limit: orkeys only exports the budget as a metric. Default: the kind `budget.limit`. Up to the kind `max_limit`. Not allowed for `void` providers |
+| `scopes` | no | DeepInfra, OpenAI and fal.ai. DeepInfra default: `[inference]`; `unrestricted` is not allowed. OpenAI default: all permissions of the service account; for example `[api.all.read]`. fal.ai: one preset or a list of permissions, default `[API]`; `FULL` and `auth:keys:*` other than `auth:keys:read` are not allowed |
+| `budget.limit` | no | Limit in USD at the provider; the provider blocks the key when spend in the period reaches it. OpenAI and fal.ai have no per-key limit: orkeys only exports the budget as a metric. Default: the kind `budget.limit`. Up to the kind `max_limit`. Not allowed for `void` providers |
 | `budget.reset` | no | Limit period: `daily`, `weekly`, `monthly` (DeepInfra: monthly only). Default: the kind `budget.reset` |
-| `ttl` | no | `90d`, `2w`, `24h`. Default and maximum: the kind `ttl`. OpenAI: at most `365d` |
+| `ttl` | no | `90d`, `2w`, `24h`. Default and maximum: the kind `ttl`. OpenAI and fal.ai: at most `365d` |
 | `secret.path`, `secret.field` | path: yes, except with `track_only: true` or a `void` provider | Where the key goes. Vault: `<mount>/<path>`; AWS: secret name. Field default `api_key`. Other fields in the same secret are kept. `secret` is one mapping or a list of mappings: orkeys writes the same key to each place. Two keys can share a path, not a path and field |
 | `consumers[]` | no | `type` (`eso`, `direct` or `github`). For `eso` and `direct`: `cluster`, `namespace`, `externalsecret` (eso), `restart` (`deployment/x`, `statefulset/x`, `daemonset/x`, `cronjob/x`). orkeys restarts only what `restart` lists. For `github`: `repo` (`owner/repo`) or `org`, `environment` (repo only), `name`, `visibility` (org only: `private` (default) or `all`), `workflows` (repo only: a list of `{workflow, ref, inputs}` to run after each write). See [GitHub Actions secrets](#github-actions-secrets). A field of another type is an error |
 | `import.id`, `import.name` | no | Adopt an existing provider key instead of creating one. `name` is its current name at the provider. See below |
-| `disabled` | no | `true` disables the key at the provider and stops its rotation. Default `false`. Not for OpenAI keys. See below |
+| `disabled` | no | `true` disables the key at the provider and stops its rotation. Default `false`. Not for OpenAI and fal.ai keys. See below |
 | `issued` | no | `void` keys only. Date of the value in `secret` (`YYYY-MM-DD`). The key expires at `issued` plus `ttl`. A change tells `apply` that the secret holds a new value. See [Keys without an API](#keys-without-an-api) |
 | `track_only` | no | `true`: orkeys saves the state of the `import` key and exports its metrics, and does not change the key. Default: the provider option `track_only`. `false` on a key of a provider with `track_only: true` makes a managed key. See [Tracking a key](#tracking-a-key) |
 
@@ -592,8 +670,8 @@ The token needs "Actions: read and write" on the repository, in addition to "Sec
 
 Set `disabled: true` in the manifest to stop a key and keep its state and secret. `plan` shows `disable`, and `apply`
 disables the key at the provider (`key_disabled` event). OpenRouter has a disabled flag. DeepInfra has none, so orkeys
-sets the limit to 0. OpenAI has neither, so `validate` rejects `disabled: true` on OpenAI keys; delete the manifest to
-revoke the key. A new or imported key with `disabled: true` is disabled right after `apply` creates or adopts it.
+sets the limit to 0. OpenAI and fal.ai have neither, so `validate` rejects `disabled: true` on their keys; delete the
+manifest to revoke the key. A new or imported key with `disabled: true` is disabled right after `apply` creates or adopts it.
 
 A disabled key does not rotate, and `rotate --now` fails for it. `plan` does not change its limit, and `hygiene` does
 not report it as unused. An OpenRouter key still has its native expiry; after it expires, `plan` recreates it as a
@@ -716,10 +794,14 @@ Limits:
 - orkeys has no spend data. `budget`, `import` and `track_only` are not allowed.
 - The key ID is a hash of the key name and the value (`fp-...`). The hash goes to the state and to the secret
   metadata. It is safe for random API keys. It does not protect a short password.
-- `plan` reads the secret values of `void` keys. The `plan` job needs read access to them.
+- `plan` reads the secret values of `void` and fal.ai keys. The `plan` job needs read access to them.
 - orkeys does not see a new value in the secret by itself. Change `issued` in the manifest, or run `orkeys put`.
-- `put` needs write access to the state store and the secrets store.
+- `put` needs write access to the state store and the secrets store. For a fal.ai key, it also needs the fal.ai
+  management key.
 - The consumers sync in the next `rotate` run, with the credentials of that run.
+
+fal.ai keys use this flow too, because the fal.ai API cannot create keys. orkeys revokes their old keys and shows
+their spend. See [fal.ai keys in inventory mode](#falai-keys-in-inventory-mode).
 
 Use a provider of type `void` for a vendor without a key API. orkeys tracks the expiry of the key, writes the value
 to `secret`, syncs the consumers and sends reminders. A key without `secret` is only an expiry date: orkeys sends the
@@ -827,7 +909,7 @@ providers:
       report_unmanaged: false                # other teams make keys in this project
 ```
 
-The key ID is the OpenRouter key `hash`, the DeepInfra token ID or the OpenAI key ID. `orkeys keys -p <provider> list`
+The key ID is the OpenRouter key `hash`, the DeepInfra token ID, the OpenAI key ID or the fal.ai `key_id`. `orkeys keys -p <provider> list`
 and the `plan` output show it. A disabled key is an OpenRouter key with the disabled flag, a DeepInfra key with a
 limit of 0, or an OpenAI key with inactive project access.
 
@@ -993,8 +1075,9 @@ races with a takeover of an expired lock can remove the new holder's lock.
    store themselves) get no force-sync, only their `restart` targets. CronJobs are not restarted; the next run reads
    the new secret. `github` consumers get the new key written to their GitHub Actions secrets, and orkeys starts their `workflows`.
 3. 15 minutes after the switch, a `rotate` run records the old key's usage (total usage on OpenRouter, spend this
-   month on DeepInfra and OpenAI). OpenAI reports spend with a delay, so use a `revoke_grace` of at least 24h for
-   OpenAI keys. After `revoke_grace` (24h), `rotate` compares it again. If the usage grew, a consumer still has
+   month on DeepInfra, OpenAI and fal.ai). OpenAI reports spend with a delay, so use a `revoke_grace` of at least 24h
+   for OpenAI keys. fal.ai does not document the delay of its usage estimate: use at least 24h for fal.ai keys too.
+   After `revoke_grace` (24h), `rotate` compares it again. If the usage grew, a consumer still has
    the old key: orkeys does not revoke it and marks the rotation as failed. For OpenAI keys a last use after the
    switch also counts, because OpenAI reports it without delay. If the spend went down (a new month started),
    orkeys records a new baseline and decides on the next run. If no run recorded the usage in between, the run at
@@ -1004,6 +1087,7 @@ races with a takeover of an expired lock can remove the new holder's lock.
    new baseline. Only spend after the retry counts.
 
 OpenRouter and OpenAI keys also get a native expiry at `ttl`. DeepInfra keys have none; orkeys revokes them itself.
+A fal.ai key has the expiry that the person set at fal.ai, if any.
 
 ### Requested keys
 
@@ -1062,15 +1146,15 @@ The exporter polls the providers every `--interval` (default 10m) and serves the
 metrics; `/healthz` returns 200 after the first poll. It needs read access to the state and to the management keys.
 Key series have the labels `name`, `team`, `kind`, `env`, `provider`, `service`, `owner`, `notify_channel`,
 `alert_channel` and `reset`, so Alertmanager can route by team and channel. orkeys has no alert thresholds: an alert
-rule compares `orkeys_key_spend_usd` with `orkeys_key_budget_usd`, for example `spend / budget > 0.8`. For OpenAI keys
-this rule is the only control of spend: OpenAI does not stop a key at its budget.
+rule compares `orkeys_key_spend_usd` with `orkeys_key_budget_usd`, for example `spend / budget > 0.8`. For OpenAI and
+fal.ai keys this rule is the only control of spend: these providers do not stop a key at its budget.
 
 | Metric | Meaning |
 |---|---|
 | `orkeys_key_spend_usd` | Spend in the current limit period (`reset`: today, this week or this month) |
 | `orkeys_key_budget_usd` | `budget.limit` from the manifest for the same period. Not for `void` keys |
-| `orkeys_key_hard_limit_usd` | Limit that the provider reports for the same period. A limit changed outside orkeys shows here, and differs from `orkeys_key_budget_usd`. No series for a key without a limit at the provider, and for providers without a per-key limit (OpenAI). A key missing at the provider shows `budget.limit` |
-| `orkeys_key_usage_usd_total` | Counter of the key usage in USD, as the provider reports it. Use `increase()` or `rate()`. It resets at each rotation; DeepInfra and OpenAI also reset it at the start of each month. OpenAI data is hours late |
+| `orkeys_key_hard_limit_usd` | Limit that the provider reports for the same period. A limit changed outside orkeys shows here, and differs from `orkeys_key_budget_usd`. No series for a key without a limit at the provider, and for providers without a per-key limit (OpenAI, fal.ai). A key missing at the provider shows `budget.limit` |
+| `orkeys_key_usage_usd_total` | Counter of the key usage in USD, as the provider reports it. Use `increase()` or `rate()`. It resets at each rotation; DeepInfra, OpenAI and fal.ai also reset it at the start of each month. OpenAI data is hours late |
 | `orkeys_key_expires_timestamp_seconds` | Expiry. Not for a tracked key without a provider expiry |
 | `orkeys_key_last_used_timestamp_seconds` | Last use (OpenRouter and OpenAI). OpenRouter reports the request time for recently used keys, so treat it as "recently used", not as an exact time |
 | `orkeys_key_created_timestamp_seconds` | Creation time of the key at the provider. When the provider does not report it: the time when orkeys created or adopted the key |
@@ -1115,6 +1199,8 @@ Layout:
 | `internal/openrouter` | HTTP client for the OpenRouter Management API |
 | `internal/deepinfra` | HTTP client for DeepInfra API tokens and key limits |
 | `internal/openai` | HTTP client for the OpenAI Admin API: project keys, service accounts, costs |
+| `internal/fal` | HTTP client for the fal.ai Platform API: keys, usage |
+| `internal/spend` | spend per key in the current UTC day, week and month, from daily costs (OpenAI, fal.ai) |
 | `internal/httpx` | JSON over HTTP with retries: reads on network errors, 408, 429 and 5xx; writes on 429 |
 | `internal/nullable` | request fields that are absent, null or set |
 | `internal/provider` | common interface, optional `Limiter` and `Disabler`, and registry of the providers; `void.go` is the provider without an API |
@@ -1125,7 +1211,7 @@ Layout:
 | `internal/engine` | plan, apply, rotate, request, issued, revoke, state listing, hygiene, import; consumer drivers in `consumers.go`, recovery in `recover.go`, `void` keys and `put` in `void.go` |
 | `internal/exporter` | Prometheus metrics |
 | `internal/kube`, `internal/deliver`, `internal/github` | kubectl, age delivery, org membership, Actions secrets |
-| `internal/cli` | cobra commands: `openrouter.go`, `deepinfra.go`, `openai.go`, `keys.go`, `inventory.go`, `put.go`, `exporter_cmd.go`; wiring in `wire.go`, output in `render.go`, event webhook in `webhook.go`, log setup in `logging.go` |
+| `internal/cli` | cobra commands: `openrouter.go`, `deepinfra.go`, `openai.go`, `fal.go`, `keys.go`, `inventory.go`, `put.go`, `exporter_cmd.go`; wiring in `wire.go`, output in `render.go`, event webhook in `webhook.go`, log setup in `logging.go` |
 | `examples/inventory` | example inventory repository with rotate and hygiene workflows; a test keeps it valid |
 | `internal/values` | input parsing and formatting |
 
@@ -1134,6 +1220,8 @@ Layout:
 1. Add an HTTP client package (`internal/<name>`) on `internal/httpx`.
 2. Add an adapter in `internal/provider` that implements `Provider`. Implement `Limiter` only if the provider has a
    per-key limit, and `Disabler` only if it can disable keys. Set `Caps` to match: `New` refuses a mismatch.
+   If the API cannot create keys, set `Caps.ManualCreate` and implement `KeyIdentifier`: it returns the provider ID
+   of a key value. Without it, `New` refuses the adapter.
 3. Add an `Info` to `registry`: `Options` for settings beyond `base_url` and `workspace`, `CheckScopes` for scopes
    that orkeys must not request.
 4. Add a fake of the API that keeps keys in memory, and run `providertest.Run` against the adapter (see

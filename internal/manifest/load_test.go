@@ -159,6 +159,38 @@ budget: {limit: 10}
 ttl: 400d
 secret: {path: kv/llm/ob}
 `, "ttl: more than 365d, the longest expiry of openai keys"},
+		"full preset on fal": {"teams/chat-core/prod-chat-core-fa.yaml", `
+name: prod-chat-core-fa
+kind: production
+provider: fal
+env: prod
+service: fa
+scopes: [FULL]
+description: d
+budget: {limit: 10}
+ttl: 30d
+secret: {path: kv/llm/fa}
+`, "scopes: preset FULL is not allowed"},
+		"import on fal": {"teams/chat-core/prod-chat-core-fb.yaml", `
+name: prod-chat-core-fb
+kind: production
+provider: fal
+env: prod
+service: fb
+description: d
+import: {id: fal_sk_1, name: old}
+secret: {path: kv/llm/fb}
+`, "import: not allowed for fal keys without track_only"},
+		"scopes on fal": {"teams/chat-core/prod-chat-core-fc.yaml", `
+name: prod-chat-core-fc
+kind: production
+provider: fal
+env: prod
+service: fc
+description: d
+scopes: [API]
+secret: {path: kv/llm/fc}
+`, "scopes: orkeys does not make fal keys"},
 		"import without name": {"teams/chat-core/prod-chat-core-i.yaml", `
 name: prod-chat-core-i
 kind: production
@@ -1185,7 +1217,7 @@ func TestIssued(t *testing.T) {
 	if inv, err = write("openrouter", "2026-09-01"); err != nil {
 		t.Fatal(err)
 	}
-	if ps := fmt.Sprint(inv.Validate()); !strings.Contains(ps, "issued: only for void providers") {
+	if ps := fmt.Sprint(inv.Validate()); !strings.Contains(ps, "issued: only for keys that a person makes") {
 		t.Errorf("issued on an openrouter key: %s", ps)
 	}
 	for _, bad := range []string{"2026-9-1", "yesterday", "[2026-09-01]"} {
@@ -1217,7 +1249,7 @@ func TestVoidProviderProblems(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ps := fmt.Sprint(inv.Validate()); !strings.Contains(ps, "kinds.personal.providers: tts is a void provider") {
+	if ps := fmt.Sprint(inv.Validate()); !strings.Contains(ps, "kinds.personal.providers: a person makes the keys of tts at the vendor") {
 		t.Errorf("request kind with a void provider: %s", ps)
 	}
 }

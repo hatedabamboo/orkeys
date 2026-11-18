@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/hatedabamboo/orkeys/internal/httpx"
+	"github.com/hatedabamboo/orkeys/internal/spend"
 )
 
 // DefaultBaseURL is the OpenAI API base URL.
@@ -246,20 +247,13 @@ type costsPage struct {
 	NextPage *string `json:"next_page"`
 }
 
-// DayCost is the cost of one key on one UTC day.
-type DayCost struct {
-	Day      time.Time
-	APIKeyID string
-	USD      float64
-}
-
 // Costs returns the cost per key and per UTC day of the project, from start to now.
 // The costs endpoint has only 1-day buckets. OpenAI fills them with a delay, so today is not complete.
-func (c *Client) Costs(ctx context.Context, start time.Time) ([]DayCost, error) {
+func (c *Client) Costs(ctx context.Context, start time.Time) ([]spend.DayCost, error) {
 	if c.project == "" {
 		return nil, ErrNoProject
 	}
-	var out []DayCost
+	var out []spend.DayCost
 	next := ""
 	for {
 		q := url.Values{
@@ -281,7 +275,7 @@ func (c *Client) Costs(ctx context.Context, start time.Time) ([]DayCost, error) 
 				if r.APIKeyID == "" || !strings.EqualFold(r.Amount.Currency, "usd") {
 					continue
 				}
-				out = append(out, DayCost{Day: time.Unix(b.StartTime, 0).UTC(), APIKeyID: r.APIKeyID, USD: r.Amount.Value})
+				out = append(out, spend.DayCost{Day: time.Unix(b.StartTime, 0).UTC(), KeyID: r.APIKeyID, USD: r.Amount.Value})
 			}
 		}
 		if !pg.HasMore || pg.NextPage == nil || *pg.NextPage == "" || *pg.NextPage == next {
@@ -289,49 +283,4 @@ func (c *Client) Costs(ctx context.Context, start time.Time) ([]DayCost, error) 
 		}
 		next = *pg.NextPage
 	}
-}
-
-// Spend is the cost of one key in the current UTC day, week (from Monday) and month.
-type Spend struct {
-	Day   float64 `json:"day"`
-	Week  float64 `json:"week"`
-	Month float64 `json:"month"`
-}
-
-// PeriodStarts returns the start of the UTC day, week (Monday) and month of now.
-func PeriodStarts(now time.Time) (day, week, month time.Time) {
-	now = now.UTC()
-	day = time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
-	week = day.AddDate(0, 0, -((int(day.Weekday()) + 6) % 7))
-	month = time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
-	return day, week, month
-}
-
-// SpendStart returns the first day that SpendByKey needs: the start of the week or of the month.
-func SpendStart(now time.Time) time.Time {
-	_, week, month := PeriodStarts(now)
-	if week.Before(month) {
-		return week
-	}
-	return month
-}
-
-// SpendByKey sums day costs into the spend of each key in the periods of now.
-func SpendByKey(costs []DayCost, now time.Time) map[string]Spend {
-	day, week, month := PeriodStarts(now)
-	out := map[string]Spend{}
-	for _, c := range costs {
-		s := out[c.APIKeyID]
-		if !c.Day.Before(day) {
-			s.Day += c.USD
-		}
-		if !c.Day.Before(week) {
-			s.Week += c.USD
-		}
-		if !c.Day.Before(month) {
-			s.Month += c.USD
-		}
-		out[c.APIKeyID] = s
-	}
-	return out
 }

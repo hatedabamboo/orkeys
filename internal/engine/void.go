@@ -23,6 +23,10 @@ import (
 // A void key has no provider ID. Its ID is valueID of the value. The ID goes to the state, the secret metadata and
 // the push records, as a provider ID does. Thus drift checks and push sync work without changes.
 // A void key without secret has no value and an empty ID. orkeys tracks only its expiry.
+//
+// A provider with Caps.ManualCreate (fal) uses the same flow, because its API cannot create keys. Its value holds
+// the provider ID (provider.KeyIdentifier), so the state has the real ID. orkeys then reads the spend of the key,
+// and rotate revokes the old key at the provider after the grace time, with the usage check of processRevokes.
 
 // valueID returns the ID of a void key value: a hash of the key name and the value.
 // The hash is safe for random API keys. It does not protect a short password: a guess is easy to check.
@@ -37,6 +41,48 @@ func (e *Engine) manual(name string) bool {
 	return err == nil && p.Caps().Manual
 }
 
+// byHand reports whether a person makes the keys of the provider name: it has no API or cannot create keys.
+func (e *Engine) byHand(name string) bool {
+	p, err := e.Providers.Get(name)
+	return err == nil && p.Caps().ByHand()
+}
+
+// keyID returns the ID of a value that a person entered for key k. A provider that names its keys in the value
+// gives the provider ID. A void key gets valueID.
+func (e *Engine) keyID(k *manifest.Key, value string) (string, error) {
+	p, err := e.Providers.Get(k.Provider)
+	if err != nil {
+		return "", err
+	}
+	ki, ok := p.(provider.KeyIdentifier)
+	if !ok {
+		return valueID(k.Name, value), nil
+	}
+	if id := ki.KeyIDOf(value); id != "" {
+		return id, nil
+	}
+	return "", fmt.Errorf("%w: %s", errNotProviderKey, k.Provider)
+}
+
+// errNotProviderKey: the value of a key is not a key of its provider. Then orkeys has no provider ID for it.
+var errNotProviderKey = errors.New("the value is not a key of the provider")
+
+// checkValue returns a warning when the value of key k cannot become its key: it is not a key of the provider, or
+// the provider does not list it. keys is the provider list. A void provider has no list, so it checks nothing.
+func (e *Engine) checkValue(k *manifest.Key, value string, keys []provider.Key) (id, warning string, err error) {
+	id, err = e.keyID(k, value)
+	if errors.Is(err, errNotProviderKey) {
+		return "", fmt.Sprintf("%v; write the full key to the secret or run orkeys put %s", err, k.Name), nil
+	}
+	if err != nil {
+		return "", "", err
+	}
+	if !e.manual(k.Provider) && provider.Find(keys, id) == nil {
+		return id, fmt.Sprintf("key %s from the secret is not at %s; check the value, or wait until the new key shows in the list", short(id), k.Provider), nil
+	}
+	return id, "", nil
+}
+
 // vendor names a void provider for a person: the name, and the console page if policy.yaml sets it.
 func (e *Engine) vendor(name string) string {
 	if c := e.Inv.Policy.Providers[name].Options.Type[provider.OptConsole]; c != "" {
@@ -48,9 +94,9 @@ func (e *Engine) vendor(name string) string {
 // waiting reports whether a void key has secret places but no value yet.
 func waiting(st *state.State) bool { return st.KeyID == "" && len(st.Secrets) > 0 }
 
-// planVoid plans a key of a void provider. orkeys cannot make or change the key at the vendor. It saves the state,
-// moves the value between secret places and syncs the push consumers.
-func (e *Engine) planVoid(ctx context.Context, plan *Plan, act Action) error {
+// planVoid plans a key that a person makes at the vendor. orkeys cannot make the key. It saves the state, moves the
+// value between secret places and syncs the push consumers. keys is the provider list (empty for void).
+func (e *Engine) planVoid(ctx context.Context, plan *Plan, act Action, keys []provider.Key) error {
 	k, st := act.Key, act.State
 	warn := func(format string, args ...any) {
 		plan.Warnings = append(plan.Warnings, k.Name+": "+fmt.Sprintf(format, args...))
@@ -63,7 +109,7 @@ func (e *Engine) planVoid(ctx context.Context, plan *Plan, act Action) error {
 	want := e.stateFor(k)
 	switch {
 	case st == nil:
-		detail, warning, err := e.registerDetail(ctx, k, want)
+		detail, warning, err := e.registerDetail(ctx, k, want, keys)
 		switch {
 		case err != nil:
 			return err
@@ -80,7 +126,7 @@ func (e *Engine) planVoid(ctx context.Context, plan *Plan, act Action) error {
 		add(ActMoveSecret, moveDetail(st, want.Secrets))
 		return nil
 	}
-	typ, detail, warning, err := e.planValue(ctx, k, st)
+	typ, detail, warning, err := e.planValue(ctx, k, st, keys)
 	switch {
 	case err != nil:
 		return err
@@ -114,7 +160,7 @@ func (e *Engine) planVoid(ctx context.Context, plan *Plan, act Action) error {
 }
 
 // registerDetail describes the register action of a new void key, or returns a warning when apply cannot register it.
-func (e *Engine) registerDetail(ctx context.Context, k *manifest.Key, want *state.State) (detail, warning string, err error) {
+func (e *Engine) registerDetail(ctx context.Context, k *manifest.Key, want *state.State, keys []provider.Key) (detail, warning string, err error) {
 	when := issuedText(k, nil, true)
 	if len(want.Secrets) == 0 {
 		return fmt.Sprintf("track %s key; %s", k.Kind, when), "", nil
@@ -128,12 +174,16 @@ func (e *Engine) registerDetail(ctx context.Context, k *manifest.Key, want *stat
 	case value == "":
 		return fmt.Sprintf("%s key; %s is empty: after apply, write the key there or run orkeys put %s", k.Kind, secretList(want.Secrets), k.Name), "", nil
 	}
-	return fmt.Sprintf("%s key; adopt value %s from %s; %s", k.Kind, short(valueID(k.Name, value)), secretList(want.Secrets), when), "", nil
+	id, warning, err := e.checkValue(k, value, keys)
+	if err != nil || warning != "" {
+		return "", warning, err
+	}
+	return fmt.Sprintf("%s key; adopt value %s from %s; %s", k.Kind, short(id), secretList(want.Secrets), when), "", nil
 }
 
 // planValue compares the value and the dates of a void key with its secret and its manifest. It reads the secret
 // only when the secret can hold a new value: the key waits for a value, or the issued date of the manifest changed.
-func (e *Engine) planValue(ctx context.Context, k *manifest.Key, st *state.State) (typ ActionType, detail, warning string, err error) {
+func (e *Engine) planValue(ctx context.Context, k *manifest.Key, st *state.State, keys []provider.Key) (typ ActionType, detail, warning string, err error) {
 	issued := orNone(k.Issued.String())
 	if k.Issued.String() == st.Issued && !waiting(st) {
 		if exp := st.CreatedAt.Add(k.TTL.Duration); !st.CreatedAt.IsZero() && !exp.Equal(st.ExpiresAt) {
@@ -156,13 +206,21 @@ func (e *Engine) planValue(ctx context.Context, k *manifest.Key, st *state.State
 	case value == "":
 		return "", "", fmt.Sprintf("issued changed, but %s is empty; write the new key there first", secretList(st.Secrets)), nil
 	}
-	id := valueID(k.Name, value)
-	if id == st.KeyID {
+	id, err := e.keyID(k, value)
+	if err == nil && id == st.KeyID {
 		return ActSetDates, fmt.Sprintf("same value %s; issued %s -> %s; %s", short(id), orNone(st.Issued), issued, issuedText(k, st, false)), "", nil
 	}
+	id, warning, err = e.checkValue(k, value, keys)
+	if err != nil || warning != "" {
+		return "", "", warning, err
+	}
 	detail = fmt.Sprintf("new value %s in %s; %s", short(id), secretList(st.Secrets), issuedText(k, st, true))
-	if st.KeyID != "" {
+	switch {
+	case st.KeyID == "":
+	case e.manual(k.Provider):
 		detail += "; old value " + short(st.KeyID) + " waits for revoke by hand"
+	default:
+		detail += "; rotate revokes old key " + short(st.KeyID) + " after the consumers sync and revoke_grace"
 	}
 	return ActAdoptValue, detail, "", nil
 }
@@ -203,11 +261,15 @@ func setDates(st *state.State, k *manifest.Key, issued time.Time) {
 	st.CreatedAt, st.ExpiresAt, st.Issued = issued, exp, k.Issued.String()
 }
 
-// replaceValue makes id the current value of st. The old value waits for a person to revoke it, and the next
-// rotate syncs the consumers.
-func replaceValue(st *state.State, id, reason string) {
+// replaceValue makes id the current value of st, and the next rotate syncs the consumers. The old value of a void
+// key waits for a person to revoke it (manual). Else rotate revokes it at the provider after the grace time.
+func replaceValue(st *state.State, id, reason string, manual bool) {
 	if st.KeyID != "" {
-		st.PendingRevokes = append(st.PendingRevokes, state.PendingRevoke{KeyID: st.KeyID, Source: state.RevokeManual, Reason: reason})
+		source := state.RevokeRotation
+		if manual {
+			source = state.RevokeManual
+		}
+		st.PendingRevokes = append(st.PendingRevokes, state.PendingRevoke{KeyID: st.KeyID, Source: source, Reason: reason})
 	}
 	st.KeyID = id
 	st.Rotation, st.RotationError = state.RotationPending, ""
@@ -222,7 +284,10 @@ func (e *Engine) adoptValue(ctx context.Context, k *manifest.Key, st *state.Stat
 	if value == "" {
 		return fmt.Errorf("%s: %s is empty", k.Name, secretList(st.Secrets))
 	}
-	id := valueID(k.Name, value)
+	id, err := e.keyID(k, value)
+	if err != nil {
+		return fmt.Errorf("%s: %w", k.Name, err)
+	}
 	if id == st.KeyID {
 		// The secret changed back after the plan. Only the dates change.
 		setDates(st, k, e.issuedFor(k, st, false))
@@ -232,7 +297,7 @@ func (e *Engine) adoptValue(ctx context.Context, k *manifest.Key, st *state.Stat
 	if err := e.writeSecrets(ctx, k, st.Secrets, value, id, st.KeyID); err != nil {
 		return fmt.Errorf("%s: %w", k.Name, err)
 	}
-	replaceValue(st, id, "replaced in the secret")
+	replaceValue(st, id, "replaced in the secret", e.manual(k.Provider))
 	setDates(st, k, e.issuedFor(k, st, true))
 	if err := e.putState(ctx, st); err != nil {
 		return err
@@ -330,7 +395,9 @@ func (e *Engine) register(ctx context.Context, k *manifest.Key) error {
 	}
 	setDates(st, k, e.issuedFor(k, nil, true))
 	if value != "" {
-		st.KeyID = valueID(k.Name, value)
+		if st.KeyID, err = e.keyID(k, value); err != nil {
+			return fmt.Errorf("%s: %w", k.Name, err)
+		}
 		// The value is in one place at least. This write adds the metadata and fills the other places.
 		if err := e.writeSecrets(ctx, k, st.Secrets, value, st.KeyID, ""); err != nil {
 			return fmt.Errorf("%s: %w", k.Name, err)
@@ -363,7 +430,7 @@ func (e *Engine) moveSecret(ctx context.Context, k *manifest.Key, st *state.Stat
 		if err != nil {
 			return err
 		}
-		if valueID(k.Name, value) != st.KeyID {
+		if id, err := e.keyID(k, value); err != nil || id != st.KeyID {
 			return fmt.Errorf("%s: %s does not hold key %s; write the value with orkeys put %s", k.Name, st.Secrets[0], short(st.KeyID), k.Name)
 		}
 		if err := e.writeSecrets(ctx, k, want, value, st.KeyID, st.KeyID); err != nil {
@@ -432,21 +499,31 @@ func (e *Engine) voidRemoved(st *state.State, reason string) {
 // schedule can start some seconds early.
 const remindEvery = 20 * time.Hour
 
-// rotateVoid runs rotate for a void key. orkeys cannot make a new key. It syncs the consumers after orkeys put,
-// forgets old values after the grace time and reminds the team to rotate the key at the vendor.
-func (e *Engine) rotateVoid(ctx context.Context, st *state.State, kp *manifest.KindPolicy, retry, force bool) error {
+// rotateVoid runs rotate for a key that a person makes. orkeys cannot make a new key. It syncs the consumers after
+// orkeys put, reminds the team to rotate the key at the vendor and handles the old values. A void provider has no
+// API: orkeys forgets an old value after the grace time, and a person revokes it. A provider with an API
+// (ManualCreate) gets the old key revoked by processRevokes, with the usage check. keys is the provider list.
+func (e *Engine) rotateVoid(ctx context.Context, st *state.State, kp *manifest.KindPolicy, keys []provider.Key, retry, force bool) error {
 	k := e.Inv.Key(st.Name)
 	if k == nil {
 		e.debug(ctx, "rotate: skip key: no manifest; apply removes it", "key", st.Name)
 		return nil
 	}
 	if force {
-		return fmt.Errorf("void key; make a new key at %s, then run: orkeys put %s", e.vendor(st.Provider), st.Name)
+		return fmt.Errorf("a person makes %s keys; make a new key at %s, then run: orkeys put %s", st.Provider, e.vendor(st.Provider), st.Name)
 	}
+	manual := e.manual(st.Provider)
 	now := e.now()
 	changed := false
 	if retry && st.Rotation == state.RotationFailed {
 		st.Rotation, st.RotationError = state.RotationPending, ""
+		// As in rotateOne: the retry says that the consumers are fixed. Only spend after the retry sync counts.
+		for i := range st.PendingRevokes {
+			if st.PendingRevokes[i].Source == state.RevokeRotation {
+				st.PendingRevokes[i].After = time.Time{}
+				st.PendingRevokes[i].Baseline = nil
+			}
+		}
 		changed = true
 	}
 	if st.Rotation == state.RotationPending {
@@ -457,15 +534,25 @@ func (e *Engine) rotateVoid(ctx context.Context, st *state.State, kp *manifest.K
 		changed = true
 		// A value that only moved to another place is not old.
 		ids = slices.DeleteFunc(slices.Compact(ids), func(id string) bool { return id == short(st.KeyID) })
-		if len(ids) > 0 {
+		switch {
+		case len(ids) == 0:
+			e.emit(st, LevelInfo, EventRotationSynced, "consumers use key %s", short(st.KeyID))
+		case manual:
 			e.emit(st, LevelAlert, EventRevokeByHand, "consumers use key %s; revoke old key %s at %s now",
 				short(st.KeyID), strings.Join(ids, ", "), e.vendor(st.Provider))
-		} else {
-			e.emit(st, LevelInfo, EventRotationSynced, "consumers use key %s", short(st.KeyID))
+		default:
+			e.emit(st, LevelInfo, EventRotationSynced, "consumers use key %s; old key %s will be revoked after %s",
+				short(st.KeyID), strings.Join(ids, ", "), now.Add(kp.RevokeGrace.Duration).Format("2006-01-02 15:04 UTC"))
 		}
 	}
-	var keep []state.PendingRevoke
+	// Manual entries are old values of a void key, and old secret places of a moved value. Both only wait for the
+	// grace time. The other entries are old provider keys.
+	var keep, revoke []state.PendingRevoke
 	for _, pr := range st.PendingRevokes {
+		if !manual && pr.Source != state.RevokeManual {
+			revoke = append(revoke, pr)
+			continue
+		}
 		if pr.After.IsZero() || now.Before(pr.After) {
 			keep = append(keep, pr)
 			continue
@@ -481,9 +568,18 @@ func (e *Engine) rotateVoid(ctx context.Context, st *state.State, kp *manifest.K
 			}
 		}
 	}
-	st.PendingRevokes = keep
+	st.PendingRevokes = revoke
+	var rerr error
+	if len(revoke) > 0 && st.Rotation != state.RotationFailed {
+		c, err := e.processRevokes(ctx, st, keys, now)
+		changed, rerr = changed || c, err
+	}
+	st.PendingRevokes = append(keep, st.PendingRevokes...)
 	if !k.Disabled && e.remindVoid(st, kp, now) {
 		changed = true
+	}
+	if rerr != nil {
+		return errors.Join(rerr, e.putState(ctx, st))
 	}
 	if changed {
 		return e.putState(ctx, st)
@@ -521,6 +617,26 @@ func (e *Engine) remindVoid(st *state.State, kp *manifest.KindPolicy, now time.T
 	return true
 }
 
+// checkListed returns an error when the provider of k has an API and does not list key id. A typo in the value
+// must not replace a working key. A void provider has no list.
+func (e *Engine) checkListed(ctx context.Context, k *manifest.Key, id string) error {
+	if e.manual(k.Provider) {
+		return nil
+	}
+	p, err := e.Providers.Get(k.Provider)
+	if err != nil {
+		return err
+	}
+	keys, err := p.List(ctx)
+	if err != nil {
+		return fmt.Errorf("list %s keys: %w", k.Provider, err)
+	}
+	if provider.Find(keys, id) == nil {
+		return fmt.Errorf("%s does not list key %s; check the value", k.Provider, short(id))
+	}
+	return nil
+}
+
 // PutOptions is the input of Put.
 type PutOptions struct {
 	// Value is the new key. It is empty for a key without secret.
@@ -541,8 +657,11 @@ func (e *Engine) Put(ctx context.Context, name string, opt PutOptions) error {
 	if k == nil {
 		return fmt.Errorf("key %s: no manifest", name)
 	}
-	if !e.manual(k.Provider) {
+	if !e.byHand(k.Provider) {
 		return fmt.Errorf("key %s: provider %s has an API; to rotate the key run: orkeys rotate --now %s", name, k.Provider, name)
+	}
+	if k.TrackOnly() {
+		return fmt.Errorf("key %s: track_only; orkeys does not write a tracked key", name)
 	}
 	st, err := e.State.GetState(ctx, name)
 	if err != nil {
@@ -578,7 +697,13 @@ func (e *Engine) Put(ctx context.Context, name string, opt PutOptions) error {
 
 	oldID := st.KeyID
 	if opt.Value != "" {
-		id := valueID(name, opt.Value)
+		id, err := e.keyID(k, opt.Value)
+		if err != nil {
+			return fmt.Errorf("key %s: %w", name, err)
+		}
+		if err := e.checkListed(ctx, k, id); err != nil {
+			return fmt.Errorf("key %s: %w", name, err)
+		}
 		if id == oldID && opt.Issued.IsZero() {
 			return fmt.Errorf("key %s: the secrets hold this value already; to change only the date, add --issued", name)
 		}
@@ -586,7 +711,7 @@ func (e *Engine) Put(ctx context.Context, name string, opt PutOptions) error {
 			if err := e.writeSecrets(ctx, k, st.Secrets, opt.Value, id, oldID); err != nil {
 				return fmt.Errorf("key %s: %w", name, err)
 			}
-			replaceValue(st, id, "replaced by orkeys put")
+			replaceValue(st, id, "replaced by orkeys put", e.manual(k.Provider))
 		}
 	}
 	st.CreatedAt, st.ExpiresAt = issued, exp

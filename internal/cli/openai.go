@@ -14,6 +14,7 @@ import (
 
 	"github.com/hatedabamboo/orkeys/internal/openai"
 	"github.com/hatedabamboo/orkeys/internal/provider"
+	"github.com/hatedabamboo/orkeys/internal/spend"
 	"github.com/hatedabamboo/orkeys/internal/values"
 )
 
@@ -25,7 +26,7 @@ const (
 
 type oaKey struct {
 	openai.Key
-	Spend openai.Spend `json:"spend_usd"`
+	Spend spend.Spend `json:"spend_usd"`
 }
 
 func (a *app) openaiCmd() *cobra.Command {
@@ -78,14 +79,14 @@ func oaList(ctx context.Context, c *openai.Client) ([]oaKey, error) {
 		return nil, err
 	}
 	now := time.Now()
-	costs, err := c.Costs(ctx, openai.SpendStart(now))
+	costs, err := c.Costs(ctx, spend.Start(now))
 	if err != nil {
 		return nil, fmt.Errorf("costs: %w", err)
 	}
-	spend := openai.SpendByKey(costs, now)
+	byKey := spend.ByKey(costs, now)
 	out := make([]oaKey, 0, len(keys))
 	for _, k := range keys {
-		out = append(out, oaKey{Key: k, Spend: spend[k.ID]})
+		out = append(out, oaKey{Key: k, Spend: byKey[k.ID]})
 	}
 	return out, nil
 }
