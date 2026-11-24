@@ -1,5 +1,14 @@
 # CHANGELOG
 
+## v0.7.1 (2026-11-24)
+
+- (change) `rotate` no longer fails a rotation at the first use of the old key after the switch. It records a new
+  baseline, sends `old_key_recheck` and waits `recheck_grace` (new kind field, default `24h`). If the old key has no
+  new use after this time, `rotate` revokes it. A new use fails the rotation with `old_key_in_use`, as before
+- (docs) `elevenlabs`: the API lists only the keys of service accounts. orkeys cannot see, import or revoke personal
+  and workspace keys that members make in the dashboard. Move their consumers to service account keys, then delete
+  the old keys in the dashboard
+
 ## v0.7.0 (2026-11-18)
 
 - (feat) Provider type `elevenlabs` for the API keys of one ElevenLabs service account. The management key needs the

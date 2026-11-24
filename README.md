@@ -275,6 +275,9 @@ consumers:
 Limits first:
 
 - Service accounts are only for multi-seat workspaces, and only a workspace admin can manage them.
+- The API lists only the keys of service accounts. orkeys cannot see, import or revoke the keys that members make in
+  the dashboard (personal and workspace keys). Move their consumers to service account keys, then delete the old keys
+  in the dashboard.
 - A new service account has no access to the resources of the workspace (voices, projects, agents). Add it to a
   group, or share the resources with it. Its keys can then use them.
 - To create, change and delete keys, orkeys needs two permissions. Without them, a key can only list the service
@@ -577,6 +580,7 @@ its keys are made and how they end:
 | `max_limit` | all | none (required for `request`) | Highest allowed limit |
 | `rotate_before` | `manifest` | `3d` | Start rotation this long before expiry. Must be shorter than `ttl` |
 | `revoke_grace` | `manifest` | `24h` | Keep the old key this long after consumers switched |
+| `recheck_grace` | `manifest` | `24h` | After the first use of the old key after the switch, wait this long and check again. No new use: orkeys revokes the old key |
 | `notify_before` | `request` | none | Send `expiry_notice` this long before expiry |
 | `max_active` | `request` | none | Active keys of this kind per person |
 | `max_total_limit` | `request` | none | Sum of limits of this kind per person |
@@ -722,8 +726,8 @@ on the repositories (fine-grained token or GitHub App), and "Organization secret
 default `GITHUB_TOKEN` of a workflow cannot write secrets. A workflow that is running during a rotation keeps the old
 value until its next run; `revoke_grace` covers this.
 
-If a consumer still uses the old key after `revoke_grace`, its spend grows and orkeys does not revoke the old key
-(`old_key_in_use`). So a consumer without `restart` must pick up the new secret by itself.
+If a consumer still uses the old key after `revoke_grace`, its spend grows. orkeys waits `recheck_grace` once more
+(`old_key_recheck`). If the spend grows again, orkeys does not revoke the old key (`old_key_in_use`). So a consumer without `restart` must pick up the new secret by itself.
 
 Add, remove or change a place in `secret` to move a key: orkeys rotates it, writes the new key to all places in the
 list, and removes the fields of removed places after the revoke. Delete the manifest to revoke the key; orkeys removes
@@ -1065,9 +1069,10 @@ The result key depends on the command: `plan` (apply), `issued` (request), `revo
 | `rotation_started` | info | A new key was written; consumers sync next. Level `alert` when orkeys issued the key because an earlier run stopped before it wrote its key to the secrets |
 | `rotation_synced` | info | Consumers use the new key; the old key will be revoked after `revoke_grace` |
 | `old_key_revoked` | info | The old key of a rotation was revoked |
+| `old_key_recheck` | info | The old key was used after the switch. orkeys revokes it after `recheck_grace` if it is not used again |
 | `expiry_notice` | info | A self-service key expires within `notify_before`, or a `void` key within `rotate_before` |
 | `rotation_failed` | alert | A consumer did not sync or restart; the old key stays active |
-| `old_key_in_use` | alert | The old key was used after the switch; it is not revoked |
+| `old_key_in_use` | alert | The old key was used after the switch, and again after `recheck_grace`; it is not revoked |
 | `consumers_synced` | info | `apply` wrote or deleted push consumer targets (GitHub Actions secrets) |
 | `consumers_sync_failed` | alert | A push consumer write or delete failed; the next `apply` tries again |
 | `key_expired` | alert | A `void` key is past its expiry. Once a day until `orkeys put` |
@@ -1179,14 +1184,18 @@ races with a takeover of an expired lock can remove the new holder's lock.
 3. 15 minutes after the switch, a `rotate` run records the old key's usage (total usage on OpenRouter, spend this
    month on DeepInfra, OpenAI and fal.ai, spend in the billing period on ElevenLabs). OpenAI reports spend with a delay, so use a `revoke_grace` of at least 24h
    for OpenAI keys. fal.ai does not document the delay of its usage estimate: use at least 24h for fal.ai keys too.
-   After `revoke_grace` (24h), `rotate` compares it again. If the usage grew, a consumer still has
-   the old key: orkeys does not revoke it and marks the rotation as failed. For OpenAI keys a last use after the
-   switch also counts, because OpenAI reports it without delay. If the spend went down (a new month started),
+   After `revoke_grace` (24h), `rotate` compares it again. If the usage did not grow, orkeys revokes the old key. For
+   OpenAI keys a last use after the switch also counts as a use, because OpenAI reports it without delay.
+   If the usage grew, orkeys does not revoke the old key yet. It sends `old_key_recheck`, records the usage as a new
+   baseline and waits `recheck_grace` (24h). A consumer that missed the switch (a job that started before it, a late
+   reload) stops in this time. After `recheck_grace`, `rotate` compares again. No new use: orkeys revokes the old key
+   and no person must act. A new use: a consumer still has the old key. orkeys does not revoke it, marks the rotation
+   as failed and sends `old_key_in_use`. If the spend went down (a new month started),
    orkeys records a new baseline and decides on the next run. If no run recorded the usage in between, the run at
    revoke time records it and the next run revokes. Run `rotate` hourly.
 4. A failed rotation sends an alert and stops. Fix the cause, then run `orkeys rotate --retry <key>`. The old key stays
    active until then. `--retry` syncs the consumers again and starts a new wait: the usage check of step 3 records a
-   new baseline. Only spend after the retry counts.
+   new baseline. Only spend after the retry counts. The first use after the retry starts a new `recheck_grace` wait.
 
 OpenRouter, OpenAI and ElevenLabs keys also get a native expiry at `ttl`. DeepInfra keys have none; orkeys revokes them itself.
 A fal.ai key has the expiry that the person set at fal.ai, if any.

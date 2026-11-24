@@ -178,6 +178,12 @@ func TestManualCreateOldKeyInUse(t *testing.T) {
 	_ = v.rotate(t, RotateOptions{}) // records the baseline of k1
 	*h.find("k1").UsageUSD = 3
 	_ = v.rotate(t, RotateOptions{})
+	if st := v.store.states[handKey]; h.find("k1") == nil || st.Rotation == state.RotationFailed || !v.events.Has(EventOldKeyRecheck, "k1") {
+		t.Fatalf("first use must start a recheck: keys %v, state %+v", h.keys, st)
+	}
+	*h.find("k1").UsageUSD = 4
+	v.clk.add(25 * time.Hour)
+	_ = v.rotate(t, RotateOptions{})
 	st := v.store.states[handKey]
 	if h.find("k1") == nil || st.Rotation != state.RotationFailed || !v.events.Has(EventOldKeyInUse, "k1") {
 		t.Fatalf("old key in use: keys %v, state %+v", h.keys, st)

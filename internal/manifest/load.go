@@ -185,6 +185,9 @@ func (p *Policy) setDefaults() {
 			if kp.RevokeGrace.Duration == 0 {
 				kp.RevokeGrace.Duration = 24 * hour
 			}
+			if kp.RecheckGrace.Duration == 0 {
+				kp.RecheckGrace.Duration = 24 * hour
+			}
 		}
 	}
 }

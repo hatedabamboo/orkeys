@@ -53,6 +53,9 @@ type PendingRevoke struct {
 	// than Baseline means a consumer still has the old key, so the revoke waits.
 	CheckFrom time.Time `json:"check_from"`
 	Baseline  *float64  `json:"baseline_usd,omitempty"`
+	// InUseAt is the time a rotate run found a use of the old key after the switch. The revoke then waits
+	// recheck_grace with a new baseline. A second use fails the rotation.
+	InUseAt time.Time `json:"in_use_at,omitzero"`
 }
 
 type State struct {

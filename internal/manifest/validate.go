@@ -268,8 +268,8 @@ func validateKind(pol *Policy, name string, add func(string, string, ...any)) {
 			add("policy.yaml", "%s.ttl: must be longer than rotate_before", at)
 		}
 	case SourceRequest:
-		if kp.RotateBefore.Duration > 0 || kp.RevokeGrace.Duration > 0 {
-			add("policy.yaml", "%s: rotate_before and revoke_grace are only for source: manifest", at)
+		if kp.RotateBefore.Duration > 0 || kp.RevokeGrace.Duration > 0 || kp.RecheckGrace.Duration > 0 {
+			add("policy.yaml", "%s: rotate_before, revoke_grace and recheck_grace are only for source: manifest", at)
 		}
 		if kp.MaxLimit <= 0 {
 			add("policy.yaml", "%s.max_limit: required for source: request", at)
