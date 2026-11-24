@@ -287,15 +287,25 @@ func TestOldKeyStillUsed(t *testing.T) {
 	v.or.find(oldID).UsageUSD = &used
 	v.clk.add(24 * time.Hour)
 	_ = v.rotate(t, RotateOptions{})
-	if v.or.find(oldID) == nil || v.store.states[prodKey].Rotation != state.RotationFailed || !hasAlert(v.events, EventOldKeyInUse, prodKey, "#chat-core-alerts") {
-		t.Fatal("old key in use must not be revoked")
+	st := v.store.states[prodKey]
+	if v.or.find(oldID) == nil || st.Rotation == state.RotationFailed || !v.events.Has(EventOldKeyRecheck, "$1.5000 spent after the switch") {
+		t.Fatalf("first use must start a recheck: %+v %v", st, v.events.Events)
+	}
+	if pr := st.PendingRevokes[0]; *pr.Baseline != 1.5 || !pr.After.Equal(v.clk.t.Add(24*time.Hour)) {
+		t.Fatalf("recheck must take a new baseline and wait recheck_grace: %+v", pr)
+	}
+
+	used = 1.75
+	v.clk.add(24 * time.Hour)
+	_ = v.rotate(t, RotateOptions{})
+	st = v.store.states[prodKey]
+	if v.or.find(oldID) == nil || st.Rotation != state.RotationFailed || !hasAlert(v.events, EventOldKeyInUse, prodKey, "#chat-core-alerts") ||
+		!strings.Contains(st.RotationError, "$0.2500 spent after the switch, also after recheck_grace") {
+		t.Fatalf("old key in use after the recheck must not be revoked: %+v", st)
 	}
 }
 
-// oldKeyInUseThenRetry fails a rotation with old_key_in_use ($1.5 after the switch), runs rotate --retry and records
-// the new baseline. The old key usage stays at $1.5.
-func oldKeyInUseThenRetry(t *testing.T) (*env, string) {
-	t.Helper()
+func TestOldKeyRecheckRevokes(t *testing.T) {
 	v := setup(t)
 	v.apply(t)
 	oldID := v.store.states[prodKey].KeyID
@@ -307,6 +317,46 @@ func oldKeyInUseThenRetry(t *testing.T) (*env, string) {
 	v.or.find(oldID).UsageUSD = &used
 	v.clk.add(24 * time.Hour)
 	_ = v.rotate(t, RotateOptions{})
+	if v.or.find(oldID) == nil {
+		t.Fatal("old key revoked before the recheck")
+	}
+
+	v.clk.add(23 * time.Hour)
+	_ = v.rotate(t, RotateOptions{})
+	if v.or.find(oldID) == nil {
+		t.Fatal("old key revoked before recheck_grace")
+	}
+	v.clk.add(time.Hour)
+	if err := v.rotate(t, RotateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	st := v.store.states[prodKey]
+	if v.or.find(oldID) != nil || len(st.PendingRevokes) != 0 || st.Rotation == state.RotationFailed {
+		t.Fatalf("old key not revoked after a recheck with no new use: %+v", st)
+	}
+	if countEvents(v.events, EventOldKeyRevoked, prodKey) != 1 || countEvents(v.events, EventOldKeyInUse, prodKey) != 0 {
+		t.Fatalf("want old_key_revoked and no old_key_in_use: %v", v.events.Events)
+	}
+}
+
+// oldKeyInUseThenRetry fails a rotation with old_key_in_use ($1 after the switch, $0.5 after the recheck), runs
+// rotate --retry and records the new baseline. The old key usage stays at $1.5.
+func oldKeyInUseThenRetry(t *testing.T) (*env, string) {
+	t.Helper()
+	v := setup(t)
+	v.apply(t)
+	oldID := v.store.states[prodKey].KeyID
+	v.clk.add(days(84))
+	_ = v.rotate(t, RotateOptions{})
+	v.clk.add(time.Hour)
+	_ = v.rotate(t, RotateOptions{})
+	used := 1.0
+	v.or.find(oldID).UsageUSD = &used
+	v.clk.add(24 * time.Hour)
+	_ = v.rotate(t, RotateOptions{})
+	used = 1.5
+	v.clk.add(24 * time.Hour)
+	_ = v.rotate(t, RotateOptions{})
 	if v.or.find(oldID) == nil || v.store.states[prodKey].Rotation != state.RotationFailed || !hasAlert(v.events, EventOldKeyInUse, prodKey, "#chat-core-alerts") {
 		t.Fatal("old key in use must not be revoked")
 	}
@@ -314,8 +364,8 @@ func oldKeyInUseThenRetry(t *testing.T) (*env, string) {
 	if err := v.rotate(t, RotateOptions{Retry: []string{prodKey}}); err != nil {
 		t.Fatal(err)
 	}
-	if prs := v.store.states[prodKey].PendingRevokes; len(prs) != 1 || prs[0].Baseline != nil {
-		t.Fatalf("retry must clear the baseline: %+v", prs)
+	if prs := v.store.states[prodKey].PendingRevokes; len(prs) != 1 || prs[0].Baseline != nil || !prs[0].InUseAt.IsZero() {
+		t.Fatalf("retry must clear the baseline and the recheck: %+v", prs)
 	}
 	v.clk.add(time.Hour)
 	_ = v.rotate(t, RotateOptions{})
@@ -356,8 +406,14 @@ func TestRetryAfterOldKeyInUseCountsNewSpend(t *testing.T) {
 	v.or.find(oldID).UsageUSD = &used
 	v.clk.add(24 * time.Hour)
 	_ = v.rotate(t, RotateOptions{})
+	if st := v.store.states[prodKey]; st.Rotation == state.RotationFailed || st.PendingRevokes[0].InUseAt.IsZero() {
+		t.Fatalf("the retry must allow a new recheck: %+v", st)
+	}
+	used = 2.5
+	v.clk.add(24 * time.Hour)
+	_ = v.rotate(t, RotateOptions{})
 	st := v.store.states[prodKey]
-	if v.or.find(oldID) == nil || st.Rotation != state.RotationFailed || !strings.Contains(st.RotationError, "$0.5000 spent after the switch") {
+	if v.or.find(oldID) == nil || st.Rotation != state.RotationFailed || !strings.Contains(st.RotationError, "$0.5000 spent after the switch, also after recheck_grace") {
 		t.Fatalf("want failed rotation for spend after the retry: %+v", st)
 	}
 }

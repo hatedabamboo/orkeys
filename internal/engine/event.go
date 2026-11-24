@@ -26,6 +26,7 @@ const (
 	EventRotationFailed      = "rotation_failed"
 	EventOldKeyRevoked       = "old_key_revoked"
 	EventOldKeyInUse         = "old_key_in_use"
+	EventOldKeyRecheck       = "old_key_recheck"
 	EventExpiryNotice        = "expiry_notice"
 	EventConsumersSynced     = "consumers_synced"
 	EventConsumersSyncFailed = "consumers_sync_failed"

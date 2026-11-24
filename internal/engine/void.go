@@ -522,6 +522,7 @@ func (e *Engine) rotateVoid(ctx context.Context, st *state.State, kp *manifest.K
 			if st.PendingRevokes[i].Source == state.RevokeRotation {
 				st.PendingRevokes[i].After = time.Time{}
 				st.PendingRevokes[i].Baseline = nil
+				st.PendingRevokes[i].InUseAt = time.Time{}
 			}
 		}
 		changed = true
@@ -571,7 +572,7 @@ func (e *Engine) rotateVoid(ctx context.Context, st *state.State, kp *manifest.K
 	st.PendingRevokes = revoke
 	var rerr error
 	if len(revoke) > 0 && st.Rotation != state.RotationFailed {
-		c, err := e.processRevokes(ctx, st, keys, now)
+		c, err := e.processRevokes(ctx, st, keys, now, recheckGrace(kp))
 		changed, rerr = changed || c, err
 	}
 	st.PendingRevokes = append(keep, st.PendingRevokes...)

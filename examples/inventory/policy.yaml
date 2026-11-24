@@ -10,6 +10,7 @@ kinds:
     ttl: 90d                                  # default and max key lifetime
     rotate_before: 3d                         # start rotation 3d before expiry
     revoke_grace: 24h                         # keep the old key 24h after the switch
+    recheck_grace: 24h                        # old key still used: wait 24h more, then revoke if no new use
     budget:                                   # default limit at the provider
       reset: monthly
       limit: 100

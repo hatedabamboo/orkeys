@@ -104,6 +104,7 @@ func (e *Engine) rotateOne(ctx context.Context, st *state.State, keys []provider
 				if st.PendingRevokes[i].Source == state.RevokeRotation {
 					st.PendingRevokes[i].After = time.Time{}
 					st.PendingRevokes[i].Baseline = nil
+					st.PendingRevokes[i].InUseAt = time.Time{}
 				}
 			}
 			changed = true
@@ -141,7 +142,7 @@ func (e *Engine) rotateOne(ctx context.Context, st *state.State, keys []provider
 	}
 
 	if st.Rotation != state.RotationFailed {
-		c, err := e.processRevokes(ctx, st, keys, now)
+		c, err := e.processRevokes(ctx, st, keys, now, recheckGrace(kp))
 		changed = changed || c
 		if err != nil {
 			return errors.Join(err, e.putState(ctx, st))
@@ -198,7 +199,17 @@ func hasUnsynced(st *state.State) bool {
 // usageEpsilon ignores rounding noise in provider spend reports.
 const usageEpsilon = 0.0001
 
-func (e *Engine) processRevokes(ctx context.Context, st *state.State, keys []provider.Key, now time.Time) (bool, error) {
+// recheckGrace returns the recheck_grace of kp, or 0 for no kind. With 0, the first use of an old key fails the rotation.
+func recheckGrace(kp *manifest.KindPolicy) time.Duration {
+	if kp == nil {
+		return 0
+	}
+	return kp.RecheckGrace.Duration
+}
+
+// processRevokes revokes the old keys of st after their grace time. The first use of an old key after the switch
+// starts a wait of recheck with a new baseline. A use after that wait fails the rotation.
+func (e *Engine) processRevokes(ctx context.Context, st *state.State, keys []provider.Key, now time.Time, recheck time.Duration) (bool, error) {
 	p, err := e.Providers.Get(st.Provider)
 	if err != nil {
 		return false, err
@@ -240,10 +251,31 @@ func (e *Engine) processRevokes(ctx context.Context, st *state.State, keys []pro
 			keep = append(keep, pr)
 			continue
 		}
-		rest := append(append(keep, pr), st.PendingRevokes[i+1:]...)
 		// The current key is never revoked. An entry with the current ID only removes old secret places.
 		current := pr.KeyID == st.KeyID
-		if why := stillUsed(pr, old, usage, p.Caps()); why != "" && !current {
+		why := ""
+		if !current {
+			why = stillUsed(pr, old, usage, p.Caps())
+		}
+		if why != "" && pr.InUseAt.IsZero() && recheck > 0 {
+			// A consumer that missed the switch (a job that started before it, a late reload) can use the old key
+			// for a while. Wait once more from a new baseline. Only a use after this wait needs a person.
+			pr.InUseAt, pr.CheckFrom, pr.After = now, now, now.Add(recheck)
+			if usage != nil {
+				v := *usage
+				pr.Baseline = &v
+			}
+			keep = append(keep, pr)
+			changed = true
+			e.emit(st, LevelInfo, EventOldKeyRecheck, "old key %s was used after the switch (%s); orkeys revokes it after %s if it is not used again",
+				short(pr.KeyID), why, pr.After.Format("2006-01-02 15:04 UTC"))
+			continue
+		}
+		rest := append(append(keep, pr), st.PendingRevokes[i+1:]...)
+		if why != "" {
+			if !pr.InUseAt.IsZero() {
+				why += ", also after recheck_grace"
+			}
 			st.PendingRevokes = rest
 			st.Rotation = state.RotationFailed
 			st.RotationError = fmt.Sprintf("old key %s %s", short(pr.KeyID), why)

@@ -144,6 +144,7 @@ type KindPolicy struct {
 	AlertChannel  string   `yaml:"alert_channel"`
 	RotateBefore  Duration `yaml:"rotate_before"`
 	RevokeGrace   Duration `yaml:"revoke_grace"`
+	RecheckGrace  Duration `yaml:"recheck_grace"`
 	NotifyBefore  Duration `yaml:"notify_before"`
 	MaxActive     int      `yaml:"max_active"`
 	MaxTotalLimit float64  `yaml:"max_total_limit"`

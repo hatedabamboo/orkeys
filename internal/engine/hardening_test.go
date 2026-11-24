@@ -160,8 +160,18 @@ func TestOldKeyUsedAfterSwitchByLastUse(t *testing.T) {
 	v.clk.add(24 * time.Hour)
 	_ = v.rotate(t, RotateOptions{})
 	st := v.store.states[prodKey]
+	if v.or.find(oldID) == nil || st.Rotation == state.RotationFailed || !v.events.Has(EventOldKeyRecheck, "used at") {
+		t.Fatalf("first use after the switch must start a recheck: %+v", st)
+	}
+
+	v.clk.add(time.Hour)
+	again := v.clk.t
+	v.or.find(oldID).LastUsedAt = &again
+	v.clk.add(23 * time.Hour)
+	_ = v.rotate(t, RotateOptions{})
+	st = v.store.states[prodKey]
 	if v.or.find(oldID) == nil || st.Rotation != state.RotationFailed || !strings.Contains(st.RotationError, "used at") {
-		t.Fatalf("old key used after the switch must not be revoked: %+v", st)
+		t.Fatalf("old key used after the recheck must not be revoked: %+v", st)
 	}
 }
 

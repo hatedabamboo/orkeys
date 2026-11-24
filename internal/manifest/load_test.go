@@ -727,6 +727,7 @@ func TestKindPolicyProblems(t *testing.T) {
 		"bad source":       {"  batch: {source: cron, ttl: 7d}\n", "kinds.batch.source: want manifest or request"},
 		"request no max":   {"  guest: {source: request, ttl: 7d}\n", "kinds.guest.max_limit: required for source: request"},
 		"request rotation": {"  guest: {source: request, ttl: 7d, max_limit: 5, rotate_before: 1d}\n", "only for source: manifest"},
+		"request recheck":  {"  guest: {source: request, ttl: 7d, max_limit: 5, recheck_grace: 1d}\n", "only for source: manifest"},
 		"manifest notify":  {"  batch: {ttl: 30d, notify_before: 1d}\n", "only for source: request"},
 		"ttl under rotate": {"  batch: {ttl: 2d}\n", "kinds.batch.ttl: must be longer than rotate_before"},
 		"default over max": {"  batch: {ttl: 30d, budget: {limit: 9}, max_limit: 5}\n", "kinds.batch.budget.limit: more than max_limit"},
@@ -777,6 +778,9 @@ secret: {path: kv/llm/batch}
 	k := inv.Key("prod-chat-core-batch")
 	if k.TTL.Duration != 30*24*hour || k.Budget.Limit != 5 || k.Budget.Reset != "weekly" {
 		t.Fatalf("defaults not applied: ttl %s budget %+v", k.TTL.Duration, k.Budget)
+	}
+	if kp := inv.Policy.Kind("batch"); kp.RevokeGrace.Duration != 24*hour || kp.RecheckGrace.Duration != 24*hour {
+		t.Fatalf("grace defaults not applied: %+v", kp)
 	}
 
 	for extra, want := range map[string]string{
